@@ -1,0 +1,4 @@
+PyQt6>=6.7
+requests>=2.32
+websockets>=15.0
+pychromecast>=14.0

@@ -1,0 +1,55 @@
+# Python environments and caches
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local credentials, device identifiers, and runtime state
+cred.txt
+*DUID
+*_duids.txt
+tv_registry.json
+*.pem
+*.p12
+*.pfx
+
+# Generated packages, build output, and SDK downloads
+*.wgt
+*.exe
+*.zip
+*.crdownload
+_installing_tv_sdk.html
+_tv_extension_download_page.html
+backup/
+downloads/
+logs/
+Sources/
+tizen_receiver_stage/
+tizen_receiver_app_clean*/
+tizen_receiver_app_exact*/
+tizen_receiver_app_legacy*/
+tizen_receiver_app_offline*/
+_pkgtest*/
+_repacked*/
+_tv6_pkg/
+tizen_receiver_app/.build*/
+tizen_receiver_app/.package*/
+tizen_receiver_app/Build*/
+tizen_receiver_app/Classic/
+tizen_receiver_app/Debug/
+tizen_receiver_app/Extra/
+tizen_receiver_app/.manifest.tmp
+
+# Logs and one-off diagnostic output
+*.log
+*.out
+*.err
+*_dlog_*.txt
+dlog_sample_err.txt
+dlog_sample_out.txt
+browser_attempt_log.txt
+bg_cmd_test.txt
+bg_start_py.txt
+ps_bg_test.txt
+tv*_appinfo.txt
+tv*_applist.txt
+tv*_smoketest_*.log

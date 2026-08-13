@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<widget xmlns="http://www.w3.org/ns/widgets"
+        xmlns:tizen="http://tizen.org/ns/widgets"
+        id="http://multihub.local/receiver"
+        version="1.0.16"
+        viewmodes="fullscreen">
+  <tizen:application id="MHubRcvr01.MultiHubReceiver"
+                     package="MHubRcvr01"
+                     required_version="8.0" />
+  <content src="index.html" />
+  <name>MultiHub Receiver</name>
+  <icon src="icon-ss1.png" />
+  <feature name="http://tizen.org/feature/screen.size.all" />
+  <tizen:privilege name="http://tizen.org/privilege/internet" />
+  <tizen:privilege name="http://tizen.org/privilege/download" />
+  <tizen:privilege name="http://tizen.org/privilege/filesystem.read" />
+  <tizen:privilege name="http://tizen.org/privilege/filesystem.write" />
+  <access origin="*" subdomains="true" />
+  <tizen:content-security-policy>
+    default-src 'self' http: https: data: blob:;
+    script-src 'self';
+    style-src 'self';
+    img-src 'self' data: blob: http: https:;
+    media-src 'self' data: blob: http: https:;
+    connect-src 'self' http: https:;
+    frame-src http: https:;
+  </tizen:content-security-policy>
+  <tizen:setting pointing-device-support="enable" />
+</widget>
