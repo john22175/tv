@@ -113,8 +113,8 @@ td:first-child { font-weight: 700; max-width: 400px; overflow-wrap: anywhere; }
 .pip-preview-label { position: absolute; z-index: 2; top: 10px; left: 10px; padding: 5px 7px; background: #000d; color: #fff; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .pip-base { width: 100%; height: 100%; object-fit: contain; background: #000; }
 .pip-empty { display: grid; width: 100%; height: 100%; place-items: center; color: #bbb; background: repeating-linear-gradient(135deg, #151515, #151515 12px, #101010 12px, #101010 24px); font-weight: 800; }
-.pip-overlay-frame { position: absolute; z-index: 3; overflow: hidden; border: 3px solid #fff; outline: 2px solid var(--accent); background: #000; box-shadow: 0 7px 18px #000c; cursor: move; user-select: none; }
-.pip-overlay-frame img, .pip-overlay-frame video { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.pip-overlay-frame { position: absolute; z-index: 3; overflow: hidden; background: #000; box-shadow: 0 7px 18px #000c; cursor: move; user-select: none; }
+.pip-overlay-frame img, .pip-overlay-frame video { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 .pip-overlay-label { position: absolute; z-index: 1; left: 0; right: 0; bottom: 0; padding: 4px 6px; background: #000b; color: #fff; font-size: clamp(.52rem, 1.2vw, .7rem); font-weight: 700; pointer-events: none; }
 .pip-resize-handle { position: absolute; right: -7px; bottom: -7px; width: 16px; height: 16px; border: 2px solid #111; background: var(--accent); cursor: nwse-resize; }
 .pip-source-shelf { display: grid; gap: 12px; padding: 18px; border: 1px solid #666; background: #0b0b0b; }

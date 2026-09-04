@@ -152,13 +152,12 @@ body.media-active .viewport {
 .picture-in-picture-overlay-frame {
   position: absolute;
   overflow: hidden;
-  border: 3px solid #ffffff;
   background: black;
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.75);
 }
 
 .picture-in-picture-overlay {
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .avplay-surface {

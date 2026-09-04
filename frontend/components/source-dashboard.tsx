@@ -213,8 +213,12 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
       const deltaY = (event.clientY - drag.originY) / bounds.height;
       setPictureInPictureLayout(() => {
         if (drag.mode === "resize") {
-          const width = clamp(drag.layout.width + deltaX, 0.12, Math.min(0.88, 1 - drag.layout.x));
-          const height = clamp(drag.layout.height + deltaY, 0.12, Math.min(0.88, 1 - drag.layout.y));
+          const aspectRatio = Math.max(0.1, drag.layout.width / drag.layout.height);
+          const widthDelta = Math.abs(deltaX) >= Math.abs(deltaY * aspectRatio) ? deltaX : deltaY * aspectRatio;
+          const minimumWidth = Math.max(0.12, 0.12 * aspectRatio);
+          const maximumWidth = Math.min(0.88, 1 - drag.layout.x, (1 - drag.layout.y) * aspectRatio);
+          const width = clamp(drag.layout.width + widthDelta, minimumWidth, maximumWidth);
+          const height = width / aspectRatio;
           return { ...drag.layout, width, height };
         }
         return {
