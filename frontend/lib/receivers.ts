@@ -9,7 +9,7 @@ export const RECEIVERS = [
   { id: "tv-1", label: "TV 1", host: "10.171.64.177" },
   { id: "tv-2", label: "TV 2", host: "10.171.64.176" },
   { id: "tv-3", label: "TV 3", host: "10.171.64.175" },
-  { id: "tv-4", label: "TV 4", host: "10.171.64.157" },
+  { id: "tv-4", label: "TV 4", host: "10.171.64.63" },
   { id: "tv-5", label: "TV 5", host: "10.171.64.174" },
   { id: "tv-6", label: "TV 6", host: "10.171.64.167" },
 ] as const;
