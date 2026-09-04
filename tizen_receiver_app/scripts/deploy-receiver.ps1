@@ -35,7 +35,10 @@ function Invoke-TizenCommand([string]$Tool, [string[]]$Arguments, [switch]$Allow
         return
     }
     Write-Host "> $display"
-    & $Tool @Arguments
+    # Keep native-tool logs visible but off PowerShell's success stream. A
+    # package-building helper returns its WGT path, and unconsumed tool output
+    # would otherwise be captured as part of that path.
+    & $Tool @Arguments | Out-Host
     if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) {
         throw "Command failed with exit code ${LASTEXITCODE}: $display"
     }
