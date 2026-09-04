@@ -19,15 +19,18 @@ if /I not "%ORIGIN_URL%"=="https://github.com/john22175/tv.git" (
     exit /b 1
 )
 
-rem Do not accidentally include anything previously staged outside this folder.
-git -C "%REPO%" diff --cached --quiet -- . ":(exclude)%RELATIVE_DIR%"
-if errorlevel 1 (
-    echo Error: changes outside this folder are already staged.
-    echo Commit or unstage them before running this script.
-    exit /b 1
+rem When stored in a subfolder, leave previously staged changes elsewhere alone.
+if defined RELATIVE_DIR (
+    git -C "%REPO%" diff --cached --quiet -- . ":(exclude)%RELATIVE_DIR%"
+    if errorlevel 1 (
+        echo Error: changes outside this folder are already staged.
+        echo Commit or unstage them before running this script.
+        exit /b 1
+    )
+    git -C "%REPO%" add -A -- "%RELATIVE_DIR%"
+) else (
+    git -C "%REPO%" add -A -- .
 )
-
-git -C "%REPO%" add -A -- "%RELATIVE_DIR%"
 git -C "%REPO%" diff --cached --quiet
 if not errorlevel 1 goto :PUSH
 
