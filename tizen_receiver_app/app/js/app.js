@@ -1,7 +1,6 @@
 const STORAGE_KEYS = {
   baseUrl: "multihub.baseUrl",
   alias: "multihub.receiverAlias",
-  receiverTarget: "multihub.receiverTarget",
 };
 const DEFAULT_BASE_PORT = 65331;
 const DEFAULT_BASE_URL = "http://10.171.64.201:65331";
@@ -898,6 +897,21 @@ function sourceMenuEntries() {
   const folderPrefix = sourceMenuFolder ? `${sourceMenuFolder}/` : "";
   const folders = new Map();
   const files = [];
+  // Git preserves explicitly-created empty folders with a hidden marker.
+  // Keep those folders visible even before a source has been placed in them.
+  for (const knownFolder of offlineLibrary.folders) {
+    const relativePath = String(knownFolder || "");
+    if (!relativePath.startsWith(folderPrefix)) {
+      continue;
+    }
+    const remainder = relativePath.slice(folderPrefix.length);
+    const divider = remainder.indexOf("/");
+    const name = divider >= 0 ? remainder.slice(0, divider) : remainder;
+    const path = `${folderPrefix}${name}`;
+    if (name && !folders.has(path)) {
+      folders.set(path, { kind: "folder", id: `folder:${path}`, name, path });
+    }
+  }
   for (const entry of offlineLibrary.entries) {
     const relativePath = String(entry.name || "");
     if (!relativePath.startsWith(folderPrefix)) {
@@ -1100,25 +1114,9 @@ function loadConfig() {
 }
 
 function receiverTargetId() {
-  try {
-    const stored = String(localStorage.getItem(STORAGE_KEYS.receiverTarget) || "").trim().toLowerCase();
-    return /^tv-[1-6]$/.test(stored) ? stored : "";
-  } catch (error) {
-    return "";
-  }
-}
-
-function assignReceiverTarget(number) {
-  const target = `tv-${number}`;
-  try {
-    localStorage.setItem(STORAGE_KEYS.receiverTarget, target);
-  } catch (error) {}
-  if (currentConfig) {
-    currentConfig = { ...currentConfig, alias: String(number) };
-  }
-  setAlias(String(number));
-  showRemoteFeedback(`Paired as TV ${number}. The dashboard listener is now active.`);
-  startReceiverStageListener();
+  const packaged = globalThis.MultiHubReceiverTarget || {};
+  const target = String(packaged.id || "").trim().toLowerCase();
+  return /^tv-[1-6]$/.test(target) ? target : "";
 }
 
 function receiverStageUrl(target) {
@@ -1189,10 +1187,11 @@ function startReceiverStageListener() {
   const interval = Math.max(10000, Number(control.pollIntervalMs) || 30000);
   if (!target || !receiverStageUrl(target)) {
     if (!currentReceiverState) {
-      renderCard("Pair This TV", "Press 1, 2, 3, 4, 5, or 6 on the remote once to enable dashboard staging.");
+      renderCard("Receiver Setup Required", "This TV has not received its dashboard identity. Reinstall it from the receiver deployment command.");
     }
     return;
   }
+  setAlias(target.replace(/^tv-/, ""));
   void pollReceiverStage();
   receiverStagePollTimer = setInterval(() => { void pollReceiverStage(); }, interval);
 }
@@ -1796,19 +1795,11 @@ function seekActivePlayback(deltaSeconds) {
 function handleRemoteKey(state, event) {
   const keyName = String(event.key || "");
   const code = Number(event.keyCode || event.which || 0);
-  const number = /^[1-6]$/.test(keyName) ? Number(keyName) : (code >= 49 && code <= 54 ? code - 48 : 0);
   const isEnter = code === 13 || code === 10252 || keyNameIn(REMOTE_KEY_NAMES.toggle, keyName);
   const isLeft = code === 37 || keyName === "ArrowLeft";
   const isRight = code === 39 || keyName === "ArrowRight";
   const isUp = code === 38 || keyName === "ArrowUp";
   const isDown = code === 40 || keyName === "ArrowDown";
-
-  if (number) {
-    event.preventDefault();
-    event.stopPropagation();
-    assignReceiverTarget(number);
-    return;
-  }
 
   if (refreshLogMenuOpen) {
     if (isDown || isUp || isEnter) {

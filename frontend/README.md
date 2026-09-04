@@ -68,6 +68,17 @@ The workflow deletes the temporary Blob after it either publishes or fails. Neve
 5. On a TV, open the receiver and select **Refresh Sources**. The new file should appear without reinstalling the receiver app.
 6. Delete the test source in the dashboard and confirm a deletion commit appears on `main`.
 
+## TV staging board
+
+The dashboard also provides the six-TV **TV stage** board. Its controls are entirely on the website:
+
+1. Create folders or drag a published source row onto a folder to organize `sources/`.
+2. Open a folder by selecting its folder card; folders also appear in the receiver's **Saved Sources** menu.
+3. Drag a source row onto a TV tile to stage it for that receiver. The app selects it on the TV during the next listener check.
+4. A green dot means that receiver has checked the website within the last ten minutes. A red dot means its receiver app is closed, offline, or has not yet been deployed with its TV identity.
+
+Receiver identities are installed by `tizen_receiver_app/scripts/deploy-receiver.ps1`; no dashboard password, GitHub credential, or manual remote pairing is stored on a TV. The receiver must be running for the website to see it and to deliver a staged source.
+
 ## Local development (optional)
 
 ```powershell
@@ -83,7 +94,7 @@ For real uploads from a local server, install the Vercel CLI, run `vercel link`,
 | Symptom | Check |
 | --- | --- |
 | Login always fails | Verify `SOURCE_DASHBOARD_PASSWORD` is set in the deployment's environment, then redeploy. |
-| Upload is rejected before starting | Check the flat filename, supported extension, unique name, and 95 MiB per-file limit. |
+| Upload is rejected before starting | Check the source filename/path, supported extension, unique destination path, and 95 MiB per-file limit. |
 | Upload waits more than five minutes | Open the failed **Publish TV source** workflow run. Common causes are a missing GitHub token permission or missing GitHub `BLOB_READ_WRITE_TOKEN` secret. |
 | Workflow cannot push | Confirm `main` is not blocking GitHub Actions through branch protection, or allow the `github-actions[bot]` token to push. |
 | TV does not show a published source | Confirm the file is under root `sources/`, then use **Refresh Sources** or restart the receiver. |

@@ -67,40 +67,77 @@ if (!$targetsConfig.targets -or $targetsConfig.targets.Count -eq 0) {
 $sdb = Find-TizenTool "sdb"
 $tizen = Find-TizenTool "tizen"
 
-$deployPackage = Join-Path $appDirectory "mhub_receiver_deploy.wgt"
+$deployRoot = Join-Path (Split-Path -Parent $appDirectory) ".deploy"
+$deployRunDirectory = Join-Path $deployRoot ("run-" + [guid]::NewGuid().ToString("N"))
+
+foreach ($target in $targetsConfig.targets) {
+    $name = [string]$target.name
+    $targetHost = [string]$target.host
+    $serial = [string]$target.serial
+    $receiverId = [string]$target.receiverId
+    if (!$name -or !$targetHost -or !$serial -or $receiverId -notmatch "^tv-[1-6]$") {
+        throw "Each target needs name, host, serial, and a receiverId from tv-1 through tv-6."
+    }
+}
+
+$receiverIds = @($targetsConfig.targets | ForEach-Object { [string]$_.receiverId })
+if (($receiverIds | Select-Object -Unique).Count -ne $receiverIds.Count) {
+    throw "Every deployment target must have a unique receiverId."
+}
+
+if (!$targetsConfig.certificateProfile) {
+    throw "certificateProfile is required to build a signed receiver package."
+}
 
 if (!$SkipBuild) {
-    if (!$targetsConfig.certificateProfile) {
-        throw "certificateProfile is required to build a signed receiver package."
-    }
-    $buildStartedAt = (Get-Date).AddSeconds(-2)
     Invoke-TizenCommand $tizen @("build-web", "--", $appDirectory)
-    $buildDirectory = @(".buildResult", ".build") |
-        ForEach-Object { Join-Path $appDirectory $_ } |
-        Where-Object { Test-Path -LiteralPath $_ } |
-        Select-Object -First 1
-    if (!$buildDirectory) {
-        throw "Tizen did not create a build output directory."
+}
+
+$buildDirectory = @(".buildResult", ".build") |
+    ForEach-Object { Join-Path $appDirectory $_ } |
+    Where-Object { Test-Path -LiteralPath $_ } |
+    Select-Object -First 1
+if (!$buildDirectory -and -not $WhatIfPreference) {
+    throw "Tizen did not create a build output directory."
+}
+
+function New-ReceiverPackage([string]$ReceiverId) {
+    $targetDirectory = Join-Path $deployRunDirectory $ReceiverId
+    $targetBuildDirectory = Join-Path $targetDirectory "app"
+    $packageDirectory = Join-Path $targetDirectory "package"
+    $deployPackage = Join-Path $targetDirectory ("mhub_receiver_" + $ReceiverId + ".wgt")
+    if ($WhatIfPreference) {
+        Write-Host "What if: create receiver-specific package $deployPackage"
+        return $deployPackage
     }
-    Invoke-TizenCommand $tizen @("package", "-t", "wgt", "-s", [string]$targetsConfig.certificateProfile, "-o", $appDirectory, "--", $buildDirectory)
-    $generatedPackage = Get-ChildItem -LiteralPath $appDirectory -Filter "*.wgt" -File |
-        Where-Object { $_.LastWriteTime -ge $buildStartedAt -and $_.FullName -ne $deployPackage } |
+
+    New-Item -ItemType Directory -Path $targetBuildDirectory -Force | Out-Null
+    New-Item -ItemType Directory -Path $packageDirectory -Force | Out-Null
+    Copy-Item -Path (Join-Path $buildDirectory "*") -Destination $targetBuildDirectory -Recurse -Force
+
+    # A per-TV package identity means a factory-reset/uninstalled app never
+    # needs the user to pair it with a remote before dashboard staging works.
+    $targetScript = Join-Path $targetBuildDirectory "js\receiver-target.js"
+    $targetContents = @"
+(function attachReceiverTarget(global) {
+  "use strict";
+  global.MultiHubReceiverTarget = { id: "$ReceiverId" };
+}(globalThis));
+"@
+    [System.IO.File]::WriteAllText($targetScript, $targetContents, (New-Object System.Text.UTF8Encoding($false)))
+
+    $packageStartedAt = (Get-Date).AddSeconds(-2)
+    Invoke-TizenCommand $tizen @("package", "-t", "wgt", "-s", [string]$targetsConfig.certificateProfile, "-o", $packageDirectory, "--", $targetBuildDirectory)
+    $generatedPackage = Get-ChildItem -LiteralPath $packageDirectory -Filter "*.wgt" -File |
+        Where-Object { $_.LastWriteTime -ge $packageStartedAt } |
         Sort-Object LastWriteTime -Descending |
         Select-Object -First 1
     if (!$generatedPackage) {
-        throw "Tizen did not produce a WGT package."
+        throw "Tizen did not produce a WGT package for $ReceiverId."
     }
-    # The Samsung installer accepts this package when its filename is simple;
-    # the generated display-name filename contains spaces and is rejected.
+    # The Samsung installer rejects generated filenames containing spaces.
     Copy-Item -LiteralPath $generatedPackage.FullName -Destination $deployPackage -Force
-}
-
-if (!(Test-Path -LiteralPath $deployPackage)) {
-    if ($WhatIfPreference) {
-        Write-Host "What if: use deployment package $deployPackage"
-    } else {
-        throw "Deployment package not found: $deployPackage. Build the receiver before using -SkipBuild."
-    }
+    return $deployPackage
 }
 
 $failures = @()
@@ -108,12 +145,11 @@ foreach ($target in $targetsConfig.targets) {
     $name = [string]$target.name
     $targetHost = [string]$target.host
     $serial = [string]$target.serial
-    if (!$name -or !$targetHost -or !$serial) {
-        throw "Each target needs name, host, and serial values."
-    }
+    $receiverId = [string]$target.receiverId
 
     try {
-        Write-Host "`nDeploying MultiHub Receiver to $name ($serial)"
+        Write-Host "`nDeploying MultiHub Receiver to $name ($serial, $receiverId)"
+        $deployPackage = New-ReceiverPackage $receiverId
         Invoke-TizenCommand $sdb @("connect", $targetHost)
         Confirm-SdbTarget $sdb $serial
         # Uninstall is deliberately tolerant: first-time installs report a non-zero exit code here.
@@ -122,7 +158,11 @@ foreach ($target in $targetsConfig.targets) {
         # tizen run is unreliable with this CLI version; Samsung's app launcher
         # opens the exact app ID directly on the selected TV.
         Invoke-TizenCommand $sdb @("-s", $serial, "shell", "0", "app_launcher", "-s", $appId)
-        Write-Host "Opened $appId on $name."
+        if ($WhatIfPreference) {
+            Write-Host "What if: open $appId on $name."
+        } else {
+            Write-Host "Opened $appId on $name."
+        }
     } catch {
         $failures += "$name ($serial): $($_.Exception.Message)"
         Write-Warning "Deployment failed for ${name}: $($_.Exception.Message)"
