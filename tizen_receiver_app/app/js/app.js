@@ -72,6 +72,7 @@ let activePlayback = {
   mediaUrl: null,
   element: null,
 };
+let pictureInPictureElements = [];
 const REMOTE_KEYS = [
   "MediaPlayPause",
   "MediaPlay",
@@ -1125,14 +1126,113 @@ function receiverStageUrl(target) {
   return baseUrl ? `${baseUrl}/api/receiver/${encodeURIComponent(target)}` : "";
 }
 
+function pictureInPictureStageElement(source, className) {
+  const mimeType = String(source && source.mimeType || mimeTypeForName(source && source.sourcePath));
+  const url = String(source && source.mediaUrl || "");
+  if (!url) {
+    return null;
+  }
+  const element = document.createElement(mimeType.startsWith("image/") ? "img" : "video");
+  element.className = className;
+  element.src = url;
+  element.alt = String(source && source.sourceName || source && source.sourcePath || "Dashboard source");
+  if (element.tagName === "VIDEO") {
+    element.autoplay = true;
+    element.loop = true;
+    element.muted = true;
+    element.playsInline = true;
+    element.preload = "auto";
+    element.setAttribute("loop", "");
+    element.setAttribute("playsinline", "");
+    element.setAttribute("webkit-playsinline", "");
+  }
+  return element;
+}
+
+function pictureInPictureLayout(command) {
+  const input = command && command.layout || {};
+  const number = (value, fallback, minimum, maximum) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
+  };
+  const width = number(input.width, 0.3, 0.12, 0.88);
+  const height = number(input.height, 0.3, 0.12, 0.88);
+  return {
+    x: number(input.x, 0.64, 0, 1 - width),
+    y: number(input.y, 0.06, 0, 1 - height),
+    width,
+    height,
+  };
+}
+
+function renderPictureInPictureStage(command) {
+  const base = command && command.base;
+  const overlay = command && command.overlay;
+  const baseElement = pictureInPictureStageElement(base, "picture-in-picture-base");
+  const overlayElement = pictureInPictureStageElement(overlay, "picture-in-picture-overlay");
+  if (!baseElement || !overlayElement) {
+    renderCard("Picture in Picture Error", "The dashboard command did not include two playable image or video sources.");
+    setStatus("Picture in Picture Error", "error");
+    return;
+  }
+  const layout = pictureInPictureLayout(command);
+  localPlaybackOverride = null;
+  currentRenderKey = `dashboard-pip:${String(command.revision || "")}`;
+  currentPlaybackToken = 0;
+  stopActivePlayback();
+  offlineActive = false;
+  currentReceiverState = {
+    receiver_alias: currentConfig ? currentConfig.alias : "",
+    source_name: `${String(base.sourceName || "Base source")} + ${String(overlay.sourceName || "Picture in picture")}`,
+    mime_type: String(base.mimeType || mimeTypeForName(base.sourcePath)),
+    media_url: String(base.mediaUrl || ""),
+    playback_state: "playing",
+    note: "Picture in picture staged from the source dashboard.",
+  };
+  headline.textContent = currentReceiverState.source_name;
+  note.textContent = currentReceiverState.note;
+  setImmersivePlayback(true);
+  viewport.innerHTML = "";
+  const stage = document.createElement("div");
+  stage.className = "picture-in-picture-stage";
+  const overlayFrame = document.createElement("div");
+  overlayFrame.className = "picture-in-picture-overlay-frame";
+  overlayFrame.style.left = `${layout.x * 100}%`;
+  overlayFrame.style.top = `${layout.y * 100}%`;
+  overlayFrame.style.width = `${layout.width * 100}%`;
+  overlayFrame.style.height = `${layout.height * 100}%`;
+  stage.append(baseElement, overlayFrame);
+  overlayFrame.appendChild(overlayElement);
+  viewport.appendChild(stage);
+  pictureInPictureElements = [baseElement, overlayElement];
+  activePlayback = {
+    mode: "picture-in-picture",
+    mediaUrl: String(base.mediaUrl || ""),
+    element: baseElement,
+  };
+  applyPlaybackState(currentReceiverState);
+  setStatus("Picture in Picture");
+  showRemoteFeedback(`${String(overlay.sourceName || "Overlay")} over ${String(base.sourceName || "base source")}.`);
+  claimRemoteFocus();
+}
+
 async function applyFrontendStage(command) {
   const revision = String(command && command.revision || "");
-  const sourcePath = String(command && command.sourcePath || "");
+  const isPictureInPicture = command && command.kind === "picture-in-picture";
+  const sourcePath = isPictureInPicture
+    ? String(command && command.base && command.base.sourcePath || "")
+    : String(command && command.sourcePath || "");
   if (!revision || !sourcePath || revision === frontendStageRevision) {
     return;
   }
   frontendStageRevision = revision;
   frontendStageActive = true;
+  if (isPictureInPicture) {
+    const overlayPath = String(command && command.overlay && command.overlay.sourcePath || "");
+    recordGitHubRefreshLog(`Dashboard staged picture in picture: ${sourcePath} + ${overlayPath}.`);
+    renderPictureInPictureStage(command);
+    return;
+  }
   recordGitHubRefreshLog(`Dashboard staged ${sourcePath}.`);
   let entry = offlineLibrary.entries.find((candidate) => candidate.id === `github:${sourcePath}`);
   if (!entry) {
@@ -1218,7 +1318,7 @@ function renderPlaybackError(state) {
 }
 
 function activeMediaIsSeekable() {
-  return activePlayback.mode === "html5-video" || activePlayback.mode === "audio" || activePlayback.mode === "avplay";
+  return activePlayback.mode === "html5-video" || activePlayback.mode === "audio" || activePlayback.mode === "avplay" || (activePlayback.mode === "picture-in-picture" && typeof activePlayback.element?.currentTime === "number");
 }
 
 function showRemoteFeedback(text) {
@@ -1287,16 +1387,30 @@ function stopActivePlayback() {
   activePlaybackOffsetSeconds = 0;
   activePlaybackOffsetApplied = false;
   currentPlaybackToken = 0;
-  if (activePlayback.element) {
+  const primaryElement = activePlayback.element;
+  if (primaryElement) {
     try {
-      activePlayback.element.pause?.();
+      primaryElement.pause?.();
     } catch (error) {}
     try {
-      activePlayback.element.removeAttribute?.("src");
-      activePlayback.element.load?.();
+      primaryElement.removeAttribute?.("src");
+      primaryElement.load?.();
     } catch (error) {}
     activePlayback.element = null;
   }
+  for (const element of pictureInPictureElements) {
+    if (element === primaryElement) {
+      continue;
+    }
+    try {
+      element.pause?.();
+    } catch (error) {}
+    try {
+      element.removeAttribute?.("src");
+      element.load?.();
+    } catch (error) {}
+  }
+  pictureInPictureElements = [];
   stopAvPlay();
   if (typeof activePlayback.mediaUrl === "string" && activePlayback.mediaUrl.startsWith("blob:")) {
     try {
@@ -1694,6 +1808,12 @@ function applyPlaybackState(state) {
       try {
         activePlayback.element?.pause?.();
       } catch (error) {}
+    } else if (activePlayback.mode === "picture-in-picture") {
+      for (const element of pictureInPictureElements) {
+        try {
+          element.pause?.();
+        } catch (error) {}
+      }
     } else if (activePlayback.mode === "avplay") {
       pauseAvPlay();
     }
@@ -1708,6 +1828,13 @@ function applyPlaybackState(state) {
   if (activePlayback.mode === "html5-video" || activePlayback.mode === "audio") {
     const element = activePlayback.element;
     if (element) {
+      const playResult = element.play?.();
+      if (playResult && typeof playResult.catch === "function") {
+        playResult.catch(() => {});
+      }
+    }
+  } else if (activePlayback.mode === "picture-in-picture") {
+    for (const element of pictureInPictureElements) {
       const playResult = element.play?.();
       if (playResult && typeof playResult.catch === "function") {
         playResult.catch(() => {});
@@ -1756,7 +1883,7 @@ function keyNameIn(group, keyName) {
 }
 
 function toggleLocalPlayback(state) {
-  if (activePlayback.mode !== "html5-video" && activePlayback.mode !== "audio" && activePlayback.mode !== "avplay") {
+  if (activePlayback.mode !== "html5-video" && activePlayback.mode !== "audio" && activePlayback.mode !== "avplay" && activePlayback.mode !== "picture-in-picture") {
     return;
   }
   const currentState = effectivePlaybackState(state);
@@ -1770,7 +1897,7 @@ function seekActivePlayback(deltaSeconds) {
     return;
   }
 
-  if (activePlayback.mode === "html5-video" || activePlayback.mode === "audio") {
+  if (activePlayback.mode === "html5-video" || activePlayback.mode === "audio" || activePlayback.mode === "picture-in-picture") {
     const media = activePlayback.element;
     if (!media) {
       return;

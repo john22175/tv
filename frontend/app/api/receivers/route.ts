@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { isAuthenticated } from "@/lib/auth";
-import { listReceiverStatuses, stageSourceForReceiver } from "@/lib/receivers";
+import { listReceiverStatuses, stagePictureInPictureForReceiver, stageSourceForReceiver } from "@/lib/receivers";
 import { SourceValidationError } from "@/lib/sources";
 
 export const dynamic = "force-dynamic";
@@ -22,8 +22,15 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   if (!(await isAuthenticated())) return unauthorized();
   try {
-    const input = await request.json() as { receiverId?: unknown; sourcePath?: unknown };
-    const command = await stageSourceForReceiver({ receiverId: String(input.receiverId || ""), sourcePath: String(input.sourcePath || "") });
+    const input = await request.json() as { kind?: unknown; receiverId?: unknown; sourcePath?: unknown; baseSourcePath?: unknown; overlaySourcePath?: unknown; layout?: unknown };
+    const command = input.kind === "picture-in-picture"
+      ? await stagePictureInPictureForReceiver({
+        receiverId: String(input.receiverId || ""),
+        baseSourcePath: String(input.baseSourcePath || ""),
+        overlaySourcePath: String(input.overlaySourcePath || ""),
+        layout: input.layout,
+      })
+      : await stageSourceForReceiver({ receiverId: String(input.receiverId || ""), sourcePath: String(input.sourcePath || "") });
     return NextResponse.json({ command }, { status: 201 });
   } catch (error) {
     const status = error instanceof SourceValidationError ? 400 : 502;

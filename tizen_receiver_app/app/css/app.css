@@ -129,6 +129,38 @@ body.media-active .viewport {
   background: black;
 }
 
+.picture-in-picture-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: black;
+}
+
+.picture-in-picture-base,
+.picture-in-picture-overlay {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: black;
+}
+
+.picture-in-picture-base {
+  object-fit: contain;
+}
+
+.picture-in-picture-overlay-frame {
+  position: absolute;
+  overflow: hidden;
+  border: 3px solid #ffffff;
+  background: black;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.75);
+}
+
+.picture-in-picture-overlay {
+  object-fit: cover;
+}
+
 .avplay-surface {
   width: 100%;
   height: 100%;

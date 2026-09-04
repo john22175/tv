@@ -3,7 +3,7 @@ import "server-only";
 import { BlobNotFoundError, head, put } from "@vercel/blob";
 
 import { listSources, type SourceRecord } from "@/lib/github";
-import { assertSourcePath, SourceValidationError } from "@/lib/sources";
+import { assertSourcePath, sourceMimeType, SourceValidationError } from "@/lib/sources";
 
 export const RECEIVERS = [
   { id: "tv-1", label: "TV 1", host: "10.171.64.177" },
@@ -17,6 +17,7 @@ export const RECEIVERS = [
 export type ReceiverId = (typeof RECEIVERS)[number]["id"];
 
 export type ReceiverStage = {
+  kind?: "source";
   revision: string;
   sourcePath: string;
   sourceName: string;
@@ -24,6 +25,25 @@ export type ReceiverStage = {
   mediaUrl: string;
   stagedAt: string;
 };
+
+export type ReceiverPictureInPictureStage = {
+  kind: "picture-in-picture";
+  revision: string;
+  base: ReceiverStageSource;
+  overlay: ReceiverStageSource;
+  layout: { x: number; y: number; width: number; height: number };
+  stagedAt: string;
+};
+
+export type ReceiverStageSource = {
+  sourcePath: string;
+  sourceName: string;
+  sourceSha: string;
+  mediaUrl: string;
+  mimeType: string;
+};
+
+export type ReceiverStageCommand = ReceiverStage | ReceiverPictureInPictureStage;
 
 export type ReceiverStatus = {
   receiverId: ReceiverId;
@@ -121,9 +141,70 @@ export async function stageSourceForReceiver(input: { receiverId: string; source
   return command;
 }
 
-export async function getReceiverStage(receiverIdInput: string): Promise<ReceiverStage | null> {
+function clampLayoutNumber(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(maximum, Math.max(minimum, number));
+}
+
+function pictureInPictureLayout(input: unknown) {
+  const candidate = input && typeof input === "object" ? input as Record<string, unknown> : {};
+  const width = clampLayoutNumber(candidate.width, 0.3, 0.12, 0.88);
+  const height = clampLayoutNumber(candidate.height, 0.3, 0.12, 0.88);
+  return {
+    x: clampLayoutNumber(candidate.x, 0.64, 0, 1 - width),
+    y: clampLayoutNumber(candidate.y, 0.06, 0, 1 - height),
+    width,
+    height,
+  };
+}
+
+async function pictureInPictureSource(pathInput: string): Promise<ReceiverStageSource> {
+  const sourcePath = assertSourcePath(pathInput);
+  const source = (await listSources()).find((entry): entry is SourceRecord => entry.kind === "file" && entry.path === sourcePath);
+  if (!source) throw new SourceValidationError("A selected picture-in-picture source no longer exists.");
+  const mimeType = sourceMimeType(sourcePath);
+  if (!mimeType.startsWith("video/") && !mimeType.startsWith("image/")) {
+    throw new SourceValidationError("Picture-in-picture supports image and video sources only.");
+  }
+  return {
+    sourcePath,
+    sourceName: source.name,
+    sourceSha: source.sha,
+    mediaUrl: source.downloadUrl,
+    mimeType,
+  };
+}
+
+export async function stagePictureInPictureForReceiver(input: {
+  receiverId: string;
+  baseSourcePath: string;
+  overlaySourcePath: string;
+  layout: unknown;
+}): Promise<ReceiverPictureInPictureStage> {
+  const receiverId = assertReceiverId(input.receiverId);
+  const [base, overlay] = await Promise.all([
+    pictureInPictureSource(input.baseSourcePath),
+    pictureInPictureSource(input.overlaySourcePath),
+  ]);
+  if (base.sourcePath === overlay.sourcePath) {
+    throw new SourceValidationError("Choose two different sources for picture-in-picture.");
+  }
+  const command: ReceiverPictureInPictureStage = {
+    kind: "picture-in-picture",
+    revision: crypto.randomUUID(),
+    base,
+    overlay,
+    layout: pictureInPictureLayout(input.layout),
+    stagedAt: new Date().toISOString(),
+  };
+  await writeBlobJson(stagePath(receiverId), command);
+  return command;
+}
+
+export async function getReceiverStage(receiverIdInput: string): Promise<ReceiverStageCommand | null> {
   const receiverId = assertReceiverId(receiverIdInput);
-  const stage = await readBlobJson<ReceiverStage>(stagePath(receiverId));
+  const stage = await readBlobJson<ReceiverStageCommand>(stagePath(receiverId));
   await touchReceiver(receiverId, stage?.revision || null);
   return stage;
 }
