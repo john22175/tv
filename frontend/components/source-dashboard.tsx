@@ -32,10 +32,11 @@ function childPath(folder: string, filename: string): string {
 }
 
 function relativeTime(value: string | null): string {
-  if (!value) return "No receiver heartbeat";
+  if (!value) return "Last connected: never";
   const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 1000));
-  if (seconds < 60) return "Listening now";
-  return `Seen ${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 60) return "Last connected: now";
+  if (seconds < 3600) return `Last connected: ${Math.floor(seconds / 60)}m ago`;
+  return `Last connected: ${Math.floor(seconds / 3600)}h ago`;
 }
 
 async function apiSources(): Promise<SourceRecord[]> {
@@ -199,7 +200,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
       </section>
 
       <section className="upload-card">
-        <div><h2>Add a source</h2><p>Current folder: <code>sources/{folder || ""}</code>. Drag published files onto a folder or TV tile to move or stage them.</p></div>
+        <div><h2>Add a source</h2><p>Current folder: <code>sources/{folder || ""}</code>. Drag published files onto a folder to move them, or use a source&apos;s Push To menu to stage it on a TV.</p></div>
         <div className="upload-actions"><button className="button secondary" type="button" onClick={() => void createFolder()}>New folder</button><label className="file-picker"><span>Choose media or document</span><input type="file" accept=".mp4,.mov,.m4v,.webm,.mp3,.wav,.ogg,.jpg,.jpeg,.png,.gif,.bmp,.webp,.pdf,.ppt,.pptx" disabled={uploadState === "uploading" || uploadState === "queued"} onChange={(event) => { void addSource(event.target.files?.[0] || null); event.currentTarget.value = ""; }} /></label></div>
         {uploadState === "uploading" || uploadState === "queued" ? <progress value={progress} max="100" /> : null}
         {message ? <p className={uploadState === "error" ? "form-error" : "status-message"}>{message}</p> : null}
@@ -211,12 +212,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
           {folder ? <button className="folder-card parent-folder" type="button" onClick={() => setFolder(parentPath(folder))}>↩ <span>Up one folder</span></button> : null}
           {visibleFolders.map((item) => <div key={item.path} className="folder-card" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const source = draggedSource(event); if (source) void moveToFolder(source, item.path); }}><button type="button" onClick={() => setFolder(item.path)}>📁 <span>{item.name}</span></button><button className="icon-button" type="button" disabled={!item.sha || deleting === item.path} onClick={() => void removeItem(item)} aria-label={`Delete ${item.path}`}>×</button></div>)}
         </div>
-        {visibleFiles.length ? <div className="source-table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Revision</th><th>Preview</th><th /></tr></thead><tbody>{visibleFiles.map((source) => <tr key={source.sha} draggable onDragStart={(event) => dragSource(event, source)}><td title="Drag to a folder or TV"><span className="drag-handle">⠿</span>{source.name}</td><td>{source.name.split(".").pop()?.toUpperCase()}</td><td>{formatBytes(source.size)}</td><td><code>{source.sha.slice(0, 10)}</code></td><td>{source.downloadUrl ? <a href={source.downloadUrl} target="_blank" rel="noreferrer">Open</a> : "—"}</td><td><button className="button danger" type="button" disabled={deleting === source.path} onClick={() => void removeItem(source)}>{deleting === source.path ? "Removing…" : "Delete"}</button></td></tr>)}</tbody></table></div> : <p className="empty-state">No media files in this folder.</p>}
-      </section>
-
-      <section className="receiver-board table-card">
-        <div className="table-heading"><div><h2>TV stage</h2><p className="board-note">Green means the running receiver checked in recently. Drop a source onto a TV to stage it.</p></div><button className="button secondary" type="button" onClick={() => void refreshReceivers()}>Refresh TVs</button></div>
-        <div className="receiver-grid">{receivers.map((receiver) => <div key={receiver.id} className={`receiver-tile${staging === receiver.id ? " staging" : ""}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const source = draggedSource(event); if (source) void stageSource(receiver.id, source); }}><div className="receiver-heading"><span className={`receiver-dot ${receiver.online ? "online" : "offline"}`} aria-label={receiver.online ? "Listening" : "Not listening"} /><strong>{receiver.label}</strong></div><span>{receiver.host}</span><small>{relativeTime(receiver.lastSeenAt)}</small></div>)}</div>
+        {visibleFiles.length ? <div className="source-table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Revision</th><th>Preview</th><th>Push to</th><th /></tr></thead><tbody>{visibleFiles.map((source) => <tr key={source.sha} draggable onDragStart={(event) => dragSource(event, source)}><td title="Drag to a folder"><span className="drag-handle">⠿</span>{source.name}</td><td>{source.name.split(".").pop()?.toUpperCase()}</td><td>{formatBytes(source.size)}</td><td><code>{source.sha.slice(0, 10)}</code></td><td>{source.downloadUrl ? <a href={source.downloadUrl} target="_blank" rel="noreferrer">Open</a> : "—"}</td><td><details className="push-menu"><summary className="button secondary">Push To <span aria-hidden="true">⌄</span></summary><div className="push-options" role="menu">{receivers.length ? receivers.map((receiver) => <button key={receiver.id} type="button" role="menuitem" disabled={staging !== null} onClick={() => void stageSource(receiver.id, source)}><span className={`receiver-dot ${receiver.online ? "online" : "offline"}`} aria-hidden="true" /><span className="push-receiver-name">{staging === receiver.id ? "Pushing…" : receiver.label}</span><small title={receiver.lastSeenAt || undefined}>{relativeTime(receiver.lastSeenAt)}</small></button>) : <span className="push-loading">Loading TVs…</span>}</div></details></td><td><button className="button danger" type="button" disabled={deleting === source.path} onClick={() => void removeItem(source)}>{deleting === source.path ? "Removing…" : "Delete"}</button></td></tr>)}</tbody></table></div> : <p className="empty-state">No media files in this folder.</p>}
       </section>
     </section>
   );
