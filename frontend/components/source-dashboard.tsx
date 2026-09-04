@@ -12,6 +12,8 @@ type FolderItem = { path: string; name: string; sha: string | null };
 type DashboardTab = "library" | "picture-in-picture";
 type PictureInPictureLayout = { x: number; y: number; width: number; height: number };
 type PictureInPictureDrag = { pointerId: number; mode: "move" | "resize"; originX: number; originY: number; layout: PictureInPictureLayout };
+type PictureInPicturePreviewSource = Pick<SourceRecord, "name" | "downloadUrl">;
+type PendingPictureInPictureUpload = { path: string; slot: "base" | "overlay"; previewUrl: string; name: string };
 
 const DEFAULT_PICTURE_IN_PICTURE_LAYOUT: PictureInPictureLayout = { x: 0.64, y: 0.06, width: 0.3, height: 0.3 };
 const PICTURE_IN_PICTURE_SELECTION = "picture-in-picture";
@@ -25,8 +27,13 @@ function sourceIsPictureInPictureReady(source: SourceRecord): boolean {
   return ["mp4", "mov", "m4v", "webm", "jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(extension);
 }
 
-function sourcePreviewKind(source: SourceRecord): "image" | "video" {
+function sourcePreviewKind(source: Pick<SourceRecord, "name">): "image" | "video" {
   return ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(source.name.split(".").at(-1)?.toLowerCase() || "") ? "image" : "video";
+}
+
+function sourceIsImageFile(file: File): boolean {
+  const extension = file.name.split(".").at(-1)?.toLowerCase() || "";
+  return ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(extension);
 }
 
 function formatBytes(value: number): string {
@@ -91,8 +98,8 @@ function PictureInPicturePreview({
   onSourceDragOver,
   onSourceDrop,
 }: {
-  base: SourceRecord | undefined;
-  overlay: SourceRecord | undefined;
+  base: PictureInPicturePreviewSource | undefined;
+  overlay: PictureInPicturePreviewSource | undefined;
   layout: PictureInPictureLayout;
   previewRef: React.RefObject<HTMLDivElement | null>;
   onOverlayPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
@@ -105,7 +112,7 @@ function PictureInPicturePreview({
       {base?.downloadUrl ? sourcePreviewKind(base) === "image"
         ? <img className="pip-base" src={base.downloadUrl} alt={`Base: ${base.name}`} />
         : <video className="pip-base" src={base.downloadUrl} muted playsInline preload="metadata" aria-label={`Base video: ${base.name}`} />
-        : <div className="pip-empty">Choose a base source</div>}
+        : <div className="pip-empty">Drop an image from your desktop, or choose a base source</div>}
       {overlay?.downloadUrl ? (
         <div
           className="pip-overlay-frame"
@@ -141,6 +148,9 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [pictureInPictureLayout, setPictureInPictureLayout] = useState<PictureInPictureLayout>(DEFAULT_PICTURE_IN_PICTURE_LAYOUT);
   const [pictureInPictureDrag, setPictureInPictureDrag] = useState<PictureInPictureDrag | null>(null);
   const pictureInPicturePreviewRef = useRef<HTMLDivElement>(null);
+  const [pendingPictureInPictureUploads, setPendingPictureInPictureUploads] = useState<PendingPictureInPictureUpload[]>([]);
+  const pictureInPicturePreviewUrlsRef = useRef(new Set<string>());
+  const pictureInPictureUploadTimersRef = useRef(new Set<number>());
   const [now, setNow] = useState(() => Date.now());
 
   const files = useMemo(() => sources.filter((item) => item.kind === "file"), [sources]);
@@ -180,9 +190,17 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   );
   const baseSource = useMemo(() => pictureInPictureFiles.find((item) => item.path === baseSourcePath), [baseSourcePath, pictureInPictureFiles]);
   const overlaySource = useMemo(() => pictureInPictureFiles.find((item) => item.path === overlaySourcePath), [overlaySourcePath, pictureInPictureFiles]);
+  const pendingBaseSource = pendingPictureInPictureUploads.find((item) => item.slot === "base");
+  const pendingOverlaySource = pendingPictureInPictureUploads.find((item) => item.slot === "overlay");
+  const basePreviewSource: PictureInPicturePreviewSource | undefined = baseSource || (pendingBaseSource ? { name: pendingBaseSource.name, downloadUrl: pendingBaseSource.previewUrl } : undefined);
+  const overlayPreviewSource: PictureInPicturePreviewSource | undefined = overlaySource || (pendingOverlaySource ? { name: pendingOverlaySource.name, downloadUrl: pendingOverlaySource.previewUrl } : undefined);
 
   useEffect(() => { void refreshReceivers(); const timer = window.setInterval(() => void refreshReceivers(), 30_000); return () => window.clearInterval(timer); }, [refreshReceivers]);
   useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => () => {
+    for (const timer of pictureInPictureUploadTimersRef.current) window.clearInterval(timer);
+    for (const url of pictureInPicturePreviewUrlsRef.current) URL.revokeObjectURL(url);
+  }, []);
   useEffect(() => {
     if (pictureInPictureDrag === null) return;
     const drag: PictureInPictureDrag = pictureInPictureDrag;
@@ -391,7 +409,8 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   }
 
   function dragOverPictureInPicture(event: React.DragEvent<HTMLDivElement>) {
-    if (!event.dataTransfer.types.includes("application/x-tv-source")) return;
+    const types = Array.from(event.dataTransfer.types);
+    if (!types.includes("application/x-tv-source") && !types.includes("Files")) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   }
@@ -400,9 +419,91 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     event.preventDefault();
     const source = draggedSource(event);
     if (!source) {
-      setUploadState("error"); setMessage("Drag a published source from the source shelf onto the TV preview."); return;
+      dropExternalPictureInPictureImage(event); return;
     }
     choosePictureInPictureSource(source);
+  }
+
+  async function addExternalPictureInPictureImage(file: File, slot: "base" | "overlay") {
+    let previewUrl = "";
+    try {
+      if (!sourceIsImageFile(file)) throw new SourceValidationError("Drag an image file (JPG, PNG, GIF, BMP, or WebP) onto the TV preview.");
+      const filename = assertSourceFilename(file.name);
+      assertSourceSize(file.size);
+      const path = filename;
+      if (files.some((item) => item.path === path) || pendingPictureInPictureUploads.some((item) => item.path === path)) {
+        throw new SourceValidationError("A source with that name already exists. Rename the image before dropping it.");
+      }
+      previewUrl = URL.createObjectURL(file);
+      pictureInPicturePreviewUrlsRef.current.add(previewUrl);
+      setPendingPictureInPictureUploads((current) => {
+        for (const item of current.filter((candidate) => candidate.slot === slot)) {
+          pictureInPicturePreviewUrlsRef.current.delete(item.previewUrl);
+          URL.revokeObjectURL(item.previewUrl);
+        }
+        return [...current.filter((candidate) => candidate.slot !== slot), { path, slot, previewUrl, name: filename }];
+      });
+      setUploadState("uploading"); setProgress(0); setMessage(`Uploading ${filename} for picture-in-picture…`);
+      const requestId = crypto.randomUUID().replace(/-/g, "");
+      await upload(`pending/${requestId}/${path}`, file, {
+        access: "public",
+        handleUploadUrl: "/api/uploads",
+        clientPayload: JSON.stringify({ path, requestId }),
+        multipart: file.size > 4 * 1024 * 1024,
+        onUploadProgress: ({ percentage }) => setProgress(Math.round(percentage)),
+      });
+      setUploadState("queued"); setMessage(`${filename} is in the TV preview and is being published to sources/.`);
+      let attempts = 0;
+      const timer = window.setInterval(() => {
+        attempts += 1;
+        void refreshSources().then((updated) => {
+          if (!updated.some((item) => item.kind === "file" && item.path === path)) return;
+          window.clearInterval(timer);
+          pictureInPictureUploadTimersRef.current.delete(timer);
+          setPendingPictureInPictureUploads((current) => {
+            const pending = current.find((item) => item.previewUrl === previewUrl);
+            if (pending) {
+              pictureInPicturePreviewUrlsRef.current.delete(pending.previewUrl);
+              URL.revokeObjectURL(pending.previewUrl);
+            }
+            return current.filter((item) => item.previewUrl !== previewUrl);
+          });
+          if (slot === "base") setBaseSourcePath(path); else setOverlaySourcePath(path);
+          setUploadState("idle"); setProgress(100); setMessage(`${filename} is published and selected as the ${slot === "base" ? "base" : "picture-in-picture"} source.`);
+        }).catch(() => undefined);
+        if (attempts < 86) return;
+        window.clearInterval(timer);
+        pictureInPictureUploadTimersRef.current.delete(timer);
+        setPendingPictureInPictureUploads((current) => {
+          const pending = current.find((item) => item.previewUrl === previewUrl);
+          if (pending) {
+            pictureInPicturePreviewUrlsRef.current.delete(pending.previewUrl);
+            URL.revokeObjectURL(pending.previewUrl);
+          }
+          return current.filter((item) => item.previewUrl !== previewUrl);
+        });
+        setUploadState("error"); setMessage(`${filename} was not published within five minutes. Check the Publish TV source workflow.`);
+      }, 3500);
+      pictureInPictureUploadTimersRef.current.add(timer);
+    } catch (error) {
+      if (previewUrl) {
+        pictureInPicturePreviewUrlsRef.current.delete(previewUrl);
+        URL.revokeObjectURL(previewUrl);
+        setPendingPictureInPictureUploads((current) => current.filter((item) => item.previewUrl !== previewUrl));
+      }
+      setUploadState("error"); setMessage(error instanceof Error ? error.message : "The image could not be uploaded.");
+    }
+  }
+
+  function dropExternalPictureInPictureImage(event: React.DragEvent<HTMLDivElement>) {
+    if (Array.from(event.dataTransfer.types).includes("application/x-tv-source")) return;
+    event.preventDefault();
+    const file = event.dataTransfer.files.item(0);
+    if (!file) {
+      setUploadState("error"); setMessage("Drop an image file from your desktop onto the TV preview."); return;
+    }
+    const slot: "base" | "overlay" = !baseSourcePath && !pendingBaseSource ? "base" : "overlay";
+    void addExternalPictureInPictureImage(file, slot);
   }
 
   const crumbs = folder ? folder.split("/") : [];
@@ -420,7 +521,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
         {dashboardTabs}
         <section className="pip-card">
           <div className="pip-heading">
-            <div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Choose sources from the lists or drag them onto the TV preview: the first drop is the base and the second is picture in picture.</p></div>
+            <div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Choose a source, or drag an image from your desktop onto the TV preview. The first drop is the base and the second is picture in picture.</p></div>
             <button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button>
           </div>
           {pictureInPictureFiles.length < 2 ? <p className="form-error">Add at least two image or video sources before creating picture-in-picture.</p> : null}
@@ -430,7 +531,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
               <label>Picture in picture<select value={overlaySourcePath} onChange={(event) => setOverlaySourcePath(event.target.value)}><option value="">Select the overlay source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === baseSourcePath}>{source.path}</option>)}</select></label>
               <div className="pip-position-readout"><span>Position</span><code>{Math.round(pictureInPictureLayout.x * 100)}% × {Math.round(pictureInPictureLayout.y * 100)}%</code><span>Size</span><code>{Math.round(pictureInPictureLayout.width * 100)}% × {Math.round(pictureInPictureLayout.height * 100)}%</code></div>
             </div>
-            <PictureInPicturePreview base={baseSource} overlay={overlaySource} layout={pictureInPictureLayout} previewRef={pictureInPicturePreviewRef} onOverlayPointerDown={beginPictureInPictureDrag} onSourceDragOver={dragOverPictureInPicture} onSourceDrop={dropPictureInPictureSource} />
+            <PictureInPicturePreview base={basePreviewSource} overlay={overlayPreviewSource} layout={pictureInPictureLayout} previewRef={pictureInPicturePreviewRef} onOverlayPointerDown={beginPictureInPictureDrag} onSourceDragOver={dragOverPictureInPicture} onSourceDrop={dropPictureInPictureSource} />
           </div>
           <section className="pip-source-shelf" aria-label="Drag sources onto the composition">
             <div><h3>Composition sources</h3><p>Drag an image or video to the TV preview, or click it to select it.</p></div>
@@ -439,7 +540,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
             </div>
           </section>
           <div className="pip-send-row">
-            <p>{baseSource && overlaySource ? <><strong>{baseSource.name}</strong> as base with <strong>{overlaySource.name}</strong> as picture in picture.</> : "Choose a base source and a second picture-in-picture source."}</p>
+            <p>{baseSource && overlaySource ? <><strong>{baseSource.name}</strong> as base with <strong>{overlaySource.name}</strong> as picture in picture.</> : pendingPictureInPictureUploads.length ? "Dropped image preview is visible. Send To unlocks once it is published to sources/." : "Choose a base source and a second picture-in-picture source."}</p>
             <details className="push-menu pip-send-menu">
               <summary className="button secondary">Send To{selectedPictureInPictureReceivers.length ? ` (${selectedPictureInPictureReceivers.length})` : ""} <span aria-hidden="true">⌄</span></summary>
               <div className="push-options">
