@@ -7,7 +7,7 @@ import type { SourceRecord } from "@/lib/github";
 import { assertSourceFilename, assertSourceSize, SOURCE_MAX_BYTES, SourceValidationError } from "@/lib/sources";
 
 type UploadState = "idle" | "uploading" | "queued" | "error";
-type Receiver = { id: string; label: string; host: string; online: boolean; lastSeenAt: string | null; commandRevision: string | null };
+type Receiver = { id: string; label: string; host: string; online: boolean; lastSeenAt: string | null; commandRevision: string | null; pollIntervalMs: number };
 type FolderItem = { path: string; name: string; sha: string | null };
 
 function formatBytes(value: number): string {
@@ -31,12 +31,22 @@ function childPath(folder: string, filename: string): string {
   return folder ? `${folder}/${filename}` : filename;
 }
 
-function relativeTime(value: string | null): string {
+function relativeTime(value: string | null, now: number): string {
   if (!value) return "Last connected: never";
-  const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(value)) / 1000));
+  const seconds = Math.max(0, Math.floor((now - Date.parse(value)) / 1000));
   if (seconds < 60) return "Last connected: now";
   if (seconds < 3600) return `Last connected: ${Math.floor(seconds / 60)}m ago`;
   return `Last connected: ${Math.floor(seconds / 3600)}h ago`;
+}
+
+function nextExpectedCheck(value: string | null, intervalMs: number, now: number): string {
+  const intervalLabel = `Checks every ${Math.round(intervalMs / 1000)}s`;
+  const lastSeen = value ? Date.parse(value) : Number.NaN;
+  if (!Number.isFinite(lastSeen) || now - lastSeen > 10 * 60 * 1000) {
+    return `${intervalLabel} · waiting for receiver`;
+  }
+  const remainingMs = intervalMs - ((now - lastSeen) % intervalMs);
+  return `${intervalLabel} · next check: about ${Math.max(1, Math.ceil(remainingMs / 1000))}s`;
 }
 
 async function apiSources(): Promise<SourceRecord[]> {
@@ -63,6 +73,8 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [pendingPath, setPendingPath] = useState<string | null>(null);
   const [receivers, setReceivers] = useState<Receiver[]>([]);
   const [staging, setStaging] = useState<string | null>(null);
+  const [selectedReceiverIds, setSelectedReceiverIds] = useState<Record<string, string[]>>({});
+  const [now, setNow] = useState(() => Date.now());
 
   const files = useMemo(() => sources.filter((item) => item.kind === "file"), [sources]);
   const totalSize = useMemo(() => files.reduce((total, item) => total + item.size, 0), [files]);
@@ -97,6 +109,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   );
 
   useEffect(() => { void refreshReceivers(); const timer = window.setInterval(() => void refreshReceivers(), 30_000); return () => window.clearInterval(timer); }, [refreshReceivers]);
+  useEffect(() => { const timer = window.setInterval(() => setNow(Date.now()), 1000); return () => window.clearInterval(timer); }, []);
   useEffect(() => {
     if (!pendingPath) return;
     let attempts = 0;
@@ -168,13 +181,27 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     } catch (error) { setMessage(error instanceof Error ? error.message : "The item could not be removed."); } finally { setDeleting(null); }
   }
 
-  async function stageSource(receiverId: string, source: SourceRecord) {
+  function toggleReceiver(sourcePath: string, receiverId: string) {
+    setSelectedReceiverIds((current) => {
+      const selected = current[sourcePath] || [];
+      const next = selected.includes(receiverId)
+        ? selected.filter((id) => id !== receiverId)
+        : [...selected, receiverId];
+      return { ...current, [sourcePath]: next };
+    });
+  }
+
+  async function stageSource(receiverIds: string[], source: SourceRecord) {
+    if (!receiverIds.length) return;
     try {
-      setStaging(receiverId); setMessage(`Staging ${source.name}…`);
-      const response = await fetch("/api/receivers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ receiverId, sourcePath: source.path }) });
-      const payload = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(payload.error || "Could not stage the source.");
-      setMessage(`${source.name} staged. The TV will pick it up on its next listener check.`); void refreshReceivers();
+      setStaging(source.path); setMessage(`Staging ${source.name} to ${receiverIds.length} TV${receiverIds.length === 1 ? "" : "s"}…`);
+      await Promise.all(receiverIds.map(async (receiverId) => {
+        const response = await fetch("/api/receivers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ receiverId, sourcePath: source.path }) });
+        const payload = await response.json() as { error?: string };
+        if (!response.ok) throw new Error(payload.error || "Could not stage the source.");
+      }));
+      setSelectedReceiverIds((current) => ({ ...current, [source.path]: [] }));
+      setMessage(`${source.name} staged for ${receiverIds.length} TV${receiverIds.length === 1 ? "" : "s"}. Each receiver checks again in about 30 seconds.`); void refreshReceivers();
     } catch (error) { setUploadState("error"); setMessage(error instanceof Error ? error.message : "Could not stage the source."); } finally { setStaging(null); }
   }
 
@@ -212,7 +239,45 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
           {folder ? <button className="folder-card parent-folder" type="button" onClick={() => setFolder(parentPath(folder))}>↩ <span>Up one folder</span></button> : null}
           {visibleFolders.map((item) => <div key={item.path} className="folder-card" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); const source = draggedSource(event); if (source) void moveToFolder(source, item.path); }}><button type="button" onClick={() => setFolder(item.path)}>📁 <span>{item.name}</span></button><button className="icon-button" type="button" disabled={!item.sha || deleting === item.path} onClick={() => void removeItem(item)} aria-label={`Delete ${item.path}`}>×</button></div>)}
         </div>
-        {visibleFiles.length ? <div className="source-table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Revision</th><th>Preview</th><th>Push to</th><th /></tr></thead><tbody>{visibleFiles.map((source) => <tr key={source.sha} draggable onDragStart={(event) => dragSource(event, source)}><td title="Drag to a folder"><span className="drag-handle">⠿</span>{source.name}</td><td>{source.name.split(".").pop()?.toUpperCase()}</td><td>{formatBytes(source.size)}</td><td><code>{source.sha.slice(0, 10)}</code></td><td>{source.downloadUrl ? <a href={source.downloadUrl} target="_blank" rel="noreferrer">Open</a> : "—"}</td><td><details className="push-menu"><summary className="button secondary">Push To <span aria-hidden="true">⌄</span></summary><div className="push-options" role="menu">{receivers.length ? receivers.map((receiver) => <button key={receiver.id} type="button" role="menuitem" disabled={staging !== null} onClick={() => void stageSource(receiver.id, source)}><span className={`receiver-dot ${receiver.online ? "online" : "offline"}`} aria-hidden="true" /><span className="push-receiver-name">{staging === receiver.id ? "Pushing…" : receiver.label}</span><small title={receiver.lastSeenAt || undefined}>{relativeTime(receiver.lastSeenAt)}</small></button>) : <span className="push-loading">Loading TVs…</span>}</div></details></td><td><button className="button danger" type="button" disabled={deleting === source.path} onClick={() => void removeItem(source)}>{deleting === source.path ? "Removing…" : "Delete"}</button></td></tr>)}</tbody></table></div> : <p className="empty-state">No media files in this folder.</p>}
+        {visibleFiles.length ? (
+          <div className="source-table-wrap">
+            <table>
+              <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Revision</th><th>Preview</th><th>Push to</th><th /></tr></thead>
+              <tbody>{visibleFiles.map((source) => {
+                const selected = selectedReceiverIds[source.path] || [];
+                const isStaging = staging === source.path;
+                return (
+                  <tr key={source.sha} draggable onDragStart={(event) => dragSource(event, source)}>
+                    <td title="Drag to a folder"><span className="drag-handle">⠿</span>{source.name}</td>
+                    <td>{source.name.split(".").pop()?.toUpperCase()}</td>
+                    <td>{formatBytes(source.size)}</td>
+                    <td><code>{source.sha.slice(0, 10)}</code></td>
+                    <td>{source.downloadUrl ? <a href={source.downloadUrl} target="_blank" rel="noreferrer">Open</a> : "—"}</td>
+                    <td>
+                      <details className="push-menu">
+                        <summary className="button secondary">Push To{selected.length ? ` (${selected.length})` : ""} <span aria-hidden="true">⌄</span></summary>
+                        <div className="push-options">
+                          {receivers.length ? <>
+                            {receivers.map((receiver) => {
+                              const checked = selected.includes(receiver.id);
+                              return <label key={receiver.id} className="push-option">
+                                <input type="checkbox" checked={checked} disabled={staging !== null} onChange={() => toggleReceiver(source.path, receiver.id)} />
+                                <span className={`receiver-dot ${receiver.online ? "online" : "offline"}`} aria-hidden="true" />
+                                <span className="push-receiver-info"><strong>{receiver.label}</strong><small title={receiver.lastSeenAt || undefined}>{relativeTime(receiver.lastSeenAt, now)} · {nextExpectedCheck(receiver.lastSeenAt, receiver.pollIntervalMs, now)}</small></span>
+                              </label>;
+                            })}
+                            <button className="button push-submit" type="button" disabled={!selected.length || staging !== null} onClick={() => void stageSource(selected, source)}>{isStaging ? "Pushing…" : `Push to ${selected.length} TV${selected.length === 1 ? "" : "s"}`}</button>
+                          </> : <span className="push-loading">Loading TVs…</span>}
+                        </div>
+                      </details>
+                    </td>
+                    <td><button className="button danger" type="button" disabled={deleting === source.path} onClick={() => void removeItem(source)}>{deleting === source.path ? "Removing…" : "Delete"}</button></td>
+                  </tr>
+                );
+              })}</tbody>
+            </table>
+          </div>
+        ) : <p className="empty-state">No media files in this folder.</p>}
       </section>
     </section>
   );

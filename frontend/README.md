@@ -74,7 +74,7 @@ The dashboard also provides the six-TV **TV stage** board. Its controls are enti
 
 1. Create folders or drag a published source row onto a folder to organize `sources/`.
 2. Open a folder by selecting its folder card; folders also appear in the receiver's **Saved Sources** menu.
-3. Use a source row's **Push To** menu to stage it for a receiver. The menu lists every TV with its green/red dot and last connection time; the app selects the source during its next listener check.
+3. Use a source row's **Push To** menu to select one or more TVs, then push that single source to all selected receivers. The menu shows every TV's green/red dot, last connection time, 30-second listener interval, and expected next check; each app selects the source during its next listener check.
 4. A green dot means that receiver has checked the website within the last ten minutes. A red dot means its receiver app is closed, offline, or has not yet been deployed with its TV identity.
 
 Receiver identities are installed by `tizen_receiver_app/scripts/deploy-receiver.ps1`; no dashboard password, GitHub credential, or manual remote pairing is stored on a TV. The receiver must be running for the website to see it and to deliver a staged source.

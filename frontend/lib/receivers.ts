@@ -32,6 +32,7 @@ export type ReceiverStatus = {
 };
 
 const HEARTBEAT_WRITE_INTERVAL_MS = 5 * 60 * 1000;
+export const RECEIVER_POLL_INTERVAL_MS = 30 * 1000;
 
 function assertReceiverId(value: string): ReceiverId {
   if (!RECEIVERS.some((receiver) => receiver.id === value)) {
@@ -88,7 +89,7 @@ async function touchReceiver(receiverId: ReceiverId, commandRevision: string | n
   } satisfies ReceiverStatus);
 }
 
-export async function listReceiverStatuses(): Promise<Array<(typeof RECEIVERS)[number] & { online: boolean; lastSeenAt: string | null; commandRevision: string | null }>> {
+export async function listReceiverStatuses(): Promise<Array<(typeof RECEIVERS)[number] & { online: boolean; lastSeenAt: string | null; commandRevision: string | null; pollIntervalMs: number }>> {
   const now = Date.now();
   return Promise.all(RECEIVERS.map(async (receiver) => {
     const status = await readBlobJson<ReceiverStatus>(statusPath(receiver.id));
@@ -98,6 +99,7 @@ export async function listReceiverStatuses(): Promise<Array<(typeof RECEIVERS)[n
       online: Number.isFinite(seen) && now - seen < HEARTBEAT_WRITE_INTERVAL_MS * 2,
       lastSeenAt: status?.lastSeenAt || null,
       commandRevision: status?.commandRevision || null,
+      pollIntervalMs: RECEIVER_POLL_INTERVAL_MS,
     };
   }));
 }
