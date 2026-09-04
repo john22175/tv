@@ -39,3 +39,6 @@ logs/
 *.log
 *.out
 *.err
+
+.vercel
+.env*

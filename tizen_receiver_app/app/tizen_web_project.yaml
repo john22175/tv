@@ -31,6 +31,7 @@ files:
   - icon-ss1.png
   - index.html
   - js/source-library.js
+  - js/receiver-control.js
   - js/app.js
 
 # list of files to exclude based on the matched patterns

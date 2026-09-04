@@ -1,6 +1,7 @@
 const STORAGE_KEYS = {
   baseUrl: "multihub.baseUrl",
   alias: "multihub.receiverAlias",
+  receiverTarget: "multihub.receiverTarget",
 };
 const DEFAULT_BASE_PORT = 65331;
 const DEFAULT_BASE_URL = "http://10.171.64.201:65331";
@@ -8,7 +9,8 @@ const GITHUB_OWNER = "john22175";
 const GITHUB_REPOSITORY = "tv";
 const GITHUB_BRANCH = "main";
 const GITHUB_COMMIT_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/commits/${GITHUB_BRANCH}`;
-const GITHUB_SOURCES_URL = (commitSha) => `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/contents/sources?ref=${encodeURIComponent(commitSha)}`;
+const GITHUB_ROOT_TREE_URL = (treeSha) => `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/git/trees/${encodeURIComponent(treeSha)}`;
+const GITHUB_SOURCES_TREE_URL = (treeSha) => `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`;
 const GITHUB_RAW_URL = (commitSha, path) => `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/${encodeURIComponent(commitSha)}/${path.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
 
 const statusBadge = document.getElementById("statusBadge");
@@ -43,6 +45,7 @@ let localPlaybackOverride = null;
 let offlineLibrary = {
   revision: "",
   entries: [],
+  folders: [],
   selectedId: "",
   storedBytes: 0,
   lastRequestId: "",
@@ -55,9 +58,13 @@ let sourceMenuOpen = false;
 let sourceMenuIndex = 0;
 let sourceMenuFocus = "sources";
 let sourceMenuActionIndex = 0;
+let sourceMenuFolder = "";
 let refreshLogMenuOpen = false;
 let githubRefreshLogs = [];
 let lastDesktopSourceKey = "";
+let frontendStageRevision = "";
+let frontendStageActive = false;
+let receiverStagePollTimer = null;
 let activePlaybackOffsetSeconds = 0;
 let activePlaybackOffsetApplied = false;
 let currentPlaybackToken = 0;
@@ -409,6 +416,7 @@ async function persistOfflineLibraryMeta() {
   await writeOfflineLibraryMeta({
     revision: offlineLibrary.revision,
     entries: offlineLibrary.entries,
+    folders: offlineLibrary.folders,
     selected_id: offlineLibrary.selectedId,
     stored_bytes: offlineLibrary.storedBytes,
     last_request_id: offlineLibrary.lastRequestId,
@@ -426,6 +434,9 @@ async function loadOfflineLibrary() {
         entries: stored.entries
           .filter((entry) => entry && entry.id && entry.content_hash)
           .map((entry) => ({ ...entry, playable: isPlayableMimeType(entry.mime_type) })),
+        folders: Array.isArray(stored.folders)
+          ? stored.folders.filter((folder) => typeof folder === "string" && folder && !folder.split("/").some((part) => part.startsWith(".")))
+          : [],
         selectedId: String(stored.selected_id || ""),
         storedBytes: Math.max(0, Number(stored.stored_bytes || 0)),
         lastRequestId: String(stored.last_request_id || ""),
@@ -529,20 +540,42 @@ async function fetchGitHubLibraryManifest() {
     throw new Error("GitHub did not provide a commit revision.");
   }
 
-  // GitHub's Contents endpoint returns precisely the direct files displayed
-  // at github.com/<owner>/<repo>/tree/main/sources.  Do not use the recursive
-  // repository tree here: it contains receiver code and other repository data.
-  const sourcesResponse = await fetch(GITHUB_SOURCES_URL(commitSha), { cache: "no-store" });
+  const rootTreeSha = String(commit && commit.commit && commit.commit.tree && commit.commit.tree.sha || "").trim();
+  if (!rootTreeSha) {
+    throw new Error("GitHub did not provide a root tree revision.");
+  }
+  // Find sources/ in the non-recursive root tree, then query that subtree.
+  // This gives folder support without ever scanning receiver or repo files.
+  const rootResponse = await fetch(GITHUB_ROOT_TREE_URL(rootTreeSha), { cache: "no-store" });
+  if (!rootResponse.ok) {
+    throw new Error(`GitHub source lookup returned HTTP ${rootResponse.status}.`);
+  }
+  const rootPayload = await rootResponse.json();
+  const sourcesNode = (Array.isArray(rootPayload && rootPayload.tree) ? rootPayload.tree : [])
+    .find((node) => node && node.type === "tree" && node.path === "sources");
+  if (!sourcesNode || !sourcesNode.sha) {
+    return {
+      receiver_id: "github-public-library",
+      revision: `github:${commitSha}`,
+      request_id: `github:${commitSha}`,
+      entries: [],
+      folders: [],
+    };
+  }
+  const sourcesResponse = await fetch(GITHUB_SOURCES_TREE_URL(String(sourcesNode.sha)), { cache: "no-store" });
   if (!sourcesResponse.ok) {
     throw new Error(`GitHub source lookup returned HTTP ${sourcesResponse.status}.`);
   }
   const sourcePayload = await sourcesResponse.json();
+  if (sourcePayload && sourcePayload.truncated) {
+    throw new Error("GitHub sources tree is too large to refresh safely.");
+  }
 
-  const entries = (Array.isArray(sourcePayload) ? sourcePayload : [])
-    .filter((node) => node && node.type === "file" && globalThis.MultiHubSourceLibrary.isGitHubSourcePath(String(node.path || "")))
+  const entries = (Array.isArray(sourcePayload && sourcePayload.tree) ? sourcePayload.tree : [])
+    .filter((node) => node && node.type === "blob" && globalThis.MultiHubSourceLibrary.isGitHubSourcePath(`sources/${String(node.path || "")}`))
     .map((node) => {
-      const path = String(node.path || "");
-      const relativePath = globalThis.MultiHubSourceLibrary.githubSourceRelativePath(path);
+      const relativePath = String(node.path || "");
+      const path = `sources/${relativePath}`;
       const size = Number(node.size);
       const mimeType = mimeTypeForName(relativePath);
       return {
@@ -558,12 +591,18 @@ async function fetchGitHubLibraryManifest() {
       };
     })
     .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const folders = (Array.isArray(sourcePayload && sourcePayload.tree) ? sourcePayload.tree : [])
+    .filter((node) => node && node.type === "tree" && globalThis.MultiHubSourceLibrary.isGitHubSourcePath(`sources/${String(node.path || "")}`))
+    .map((node) => String(node.path || ""))
+    .filter(Boolean)
+    .sort();
 
   return {
     receiver_id: "github-public-library",
     revision: `github:${commitSha}`,
     request_id: `github:${commitSha}`,
     entries,
+    folders,
   };
 }
 
@@ -640,6 +679,7 @@ async function applyOfflineLibraryManifest(baseUrl, manifest) {
   offlineLibrary = {
     revision: String(manifest.revision || ""),
     entries: storedEntries,
+    folders: Array.isArray(manifest.folders) ? manifest.folders.filter((folder) => typeof folder === "string" && folder) : [],
     selectedId: storedEntries.some((entry) => entry.id === previousSelection) ? previousSelection : "",
     storedBytes: uniqueLibraryBytes(storedEntries),
     lastRequestId: String(manifest.request_id || ""),
@@ -854,8 +894,41 @@ function closeSourceMenu() {
   claimRemoteFocus();
 }
 
+function sourceMenuEntries() {
+  const folderPrefix = sourceMenuFolder ? `${sourceMenuFolder}/` : "";
+  const folders = new Map();
+  const files = [];
+  for (const entry of offlineLibrary.entries) {
+    const relativePath = String(entry.name || "");
+    if (!relativePath.startsWith(folderPrefix)) {
+      continue;
+    }
+    const remainder = relativePath.slice(folderPrefix.length);
+    const divider = remainder.indexOf("/");
+    if (divider >= 0) {
+      const name = remainder.slice(0, divider);
+      const path = `${folderPrefix}${name}`;
+      if (name && !folders.has(path)) {
+        folders.set(path, { kind: "folder", id: `folder:${path}`, name, path });
+      }
+    } else if (remainder) {
+      files.push({ kind: "file", ...entry, display_name: remainder });
+    }
+  }
+  return [...folders.values()].sort((left, right) => left.name.localeCompare(right.name))
+    .concat(files.sort((left, right) => String(left.display_name).localeCompare(String(right.display_name))));
+}
+
+function sourceMenuParent() {
+  if (!sourceMenuFolder) {
+    return "";
+  }
+  const index = sourceMenuFolder.lastIndexOf("/");
+  return index < 0 ? "" : sourceMenuFolder.slice(0, index);
+}
+
 function renderSourceMenu() {
-  const entries = offlineLibrary.entries;
+  const entries = sourceMenuEntries();
   const actionFocused = sourceMenuFocus === "actions";
   refreshSourcesAction.classList.toggle("selected", actionFocused && sourceMenuActionIndex === 0);
   refreshSourcesAction.classList.toggle("refreshing", Boolean(offlineLibrarySyncPromise));
@@ -865,29 +938,36 @@ function renderSourceMenu() {
     sourceMenuPosition.textContent = "No saved sources";
     return;
   }
+  if (sourceMenuIndex >= entries.length) {
+    sourceMenuIndex = Math.max(0, entries.length - 1);
+  }
   const visible = Math.min(5, entries.length);
   const start = entries.length <= visible ? 0 : sourceMenuIndex - Math.floor(visible / 2);
   for (let offset = 0; offset < visible; offset += 1) {
     const index = (start + offset + entries.length) % entries.length;
     const entry = entries[index];
     const item = document.createElement("div");
-    item.className = `source-menu-item${!actionFocused && index === sourceMenuIndex ? " selected" : ""}${entry.playable ? "" : " unsupported"}`;
+    item.className = `source-menu-item${!actionFocused && index === sourceMenuIndex ? " selected" : ""}${entry.kind === "folder" || entry.playable ? "" : " unsupported"}`;
     const name = document.createElement("div");
     name.className = "source-menu-item-name";
-    name.textContent = entry.name;
+    name.textContent = entry.kind === "folder" ? `📁 ${entry.name}` : entry.display_name;
     const kind = document.createElement("div");
     kind.className = "source-menu-item-kind";
-    kind.textContent = entry.playable ? String(entry.mime_type || "Saved source") : "Not playable on TV";
+    kind.textContent = entry.kind === "folder" ? "Folder" : (entry.playable ? String(entry.mime_type || "Saved source") : "Not playable on TV");
     item.append(name, kind);
     sourceMenuItems.appendChild(item);
   }
-  sourceMenuPosition.textContent = `${sourceMenuIndex + 1} / ${entries.length}`;
+  sourceMenuPosition.textContent = `${sourceMenuFolder || "sources"} · ${sourceMenuIndex + 1} / ${entries.length}`;
 }
 
 function openSourceMenu() {
   if (offlineLibrary.entries.length) {
     const selectedIndex = offlineLibrary.entries.findIndex((entry) => entry.id === offlineLibrary.selectedId);
-    sourceMenuIndex = selectedIndex >= 0 ? selectedIndex : 0;
+    const selected = selectedIndex >= 0 ? offlineLibrary.entries[selectedIndex] : null;
+    sourceMenuFolder = selected && String(selected.name || "").includes("/")
+      ? String(selected.name).slice(0, String(selected.name).lastIndexOf("/"))
+      : "";
+    sourceMenuIndex = 0;
     sourceMenuFocus = "sources";
   } else {
     sourceMenuFocus = "actions";
@@ -901,15 +981,26 @@ function openSourceMenu() {
 }
 
 function moveSourceMenu(delta) {
-  if (!offlineLibrary.entries.length) {
+  const entries = sourceMenuEntries();
+  if (!entries.length) {
     return;
   }
-  sourceMenuIndex = (sourceMenuIndex + delta + offlineLibrary.entries.length) % offlineLibrary.entries.length;
+  sourceMenuIndex = (sourceMenuIndex + delta + entries.length) % entries.length;
   renderSourceMenu();
 }
 
 async function chooseSourceMenuItem() {
-  const entry = offlineLibrary.entries[sourceMenuIndex];
+  const entry = sourceMenuEntries()[sourceMenuIndex];
+  if (!entry) {
+    return;
+  }
+  if (entry.kind === "folder") {
+    sourceMenuFolder = entry.path;
+    sourceMenuIndex = 0;
+    sourceMenuFocus = "sources";
+    renderSourceMenu();
+    return;
+  }
   closeSourceMenu();
   await renderOfflineLibraryEntry(entry);
 }
@@ -1006,6 +1097,104 @@ function loadConfig() {
   const baseUrl = paramBaseUrl || DEFAULT_BASE_URL;
   const alias = paramAlias || storedAlias || "";
   return { baseUrl, alias };
+}
+
+function receiverTargetId() {
+  try {
+    const stored = String(localStorage.getItem(STORAGE_KEYS.receiverTarget) || "").trim().toLowerCase();
+    return /^tv-[1-6]$/.test(stored) ? stored : "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function assignReceiverTarget(number) {
+  const target = `tv-${number}`;
+  try {
+    localStorage.setItem(STORAGE_KEYS.receiverTarget, target);
+  } catch (error) {}
+  if (currentConfig) {
+    currentConfig = { ...currentConfig, alias: String(number) };
+  }
+  setAlias(String(number));
+  showRemoteFeedback(`Paired as TV ${number}. The dashboard listener is now active.`);
+  startReceiverStageListener();
+}
+
+function receiverStageUrl(target) {
+  const control = globalThis.MultiHubReceiverControl || {};
+  const baseUrl = String(control.baseUrl || "").replace(/\/+$/, "");
+  return baseUrl ? `${baseUrl}/api/receiver/${encodeURIComponent(target)}` : "";
+}
+
+async function applyFrontendStage(command) {
+  const revision = String(command && command.revision || "");
+  const sourcePath = String(command && command.sourcePath || "");
+  if (!revision || !sourcePath || revision === frontendStageRevision) {
+    return;
+  }
+  frontendStageRevision = revision;
+  frontendStageActive = true;
+  recordGitHubRefreshLog(`Dashboard staged ${sourcePath}.`);
+  let entry = offlineLibrary.entries.find((candidate) => candidate.id === `github:${sourcePath}`);
+  if (!entry) {
+    await syncGitHubOfflineLibrary({ retryFailedRevision: true });
+    entry = offlineLibrary.entries.find((candidate) => candidate.id === `github:${sourcePath}`);
+  }
+  if (entry) {
+    await renderOfflineLibraryEntry(entry, { persistSelection: true });
+    setStatus("Dashboard Stage");
+    showRemoteFeedback(`${entry.name} staged from the dashboard.`);
+    return;
+  }
+  const mimeType = mimeTypeForName(sourcePath);
+  renderState({
+    receiver_alias: currentConfig ? currentConfig.alias : "",
+    source_name: sourcePath,
+    mime_type: mimeType,
+    media_url: String(command.mediaUrl || ""),
+    playback_state: "playing",
+    note: "Staged from the source dashboard.",
+  });
+  setStatus("Dashboard Stage");
+}
+
+async function pollReceiverStage() {
+  const target = receiverTargetId();
+  const url = receiverStageUrl(target);
+  if (!target || !url) {
+    return;
+  }
+  try {
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    const payload = await response.json();
+    if (payload && payload.command) {
+      await applyFrontendStage(payload.command);
+    }
+  } catch (error) {
+    console.warn("Dashboard stage listener failed", error);
+  }
+}
+
+function startReceiverStageListener() {
+  if (receiverStagePollTimer) {
+    clearInterval(receiverStagePollTimer);
+    receiverStagePollTimer = null;
+  }
+  const target = receiverTargetId();
+  const control = globalThis.MultiHubReceiverControl || {};
+  const interval = Math.max(10000, Number(control.pollIntervalMs) || 30000);
+  if (!target || !receiverStageUrl(target)) {
+    if (!currentReceiverState) {
+      renderCard("Pair This TV", "Press 1, 2, 3, 4, 5, or 6 on the remote once to enable dashboard staging.");
+    }
+    return;
+  }
+  void pollReceiverStage();
+  receiverStagePollTimer = setInterval(() => { void pollReceiverStage(); }, interval);
 }
 
 function renderCard(title, body) {
@@ -1607,11 +1796,19 @@ function seekActivePlayback(deltaSeconds) {
 function handleRemoteKey(state, event) {
   const keyName = String(event.key || "");
   const code = Number(event.keyCode || event.which || 0);
+  const number = /^[1-6]$/.test(keyName) ? Number(keyName) : (code >= 49 && code <= 54 ? code - 48 : 0);
   const isEnter = code === 13 || code === 10252 || keyNameIn(REMOTE_KEY_NAMES.toggle, keyName);
   const isLeft = code === 37 || keyName === "ArrowLeft";
   const isRight = code === 39 || keyName === "ArrowRight";
   const isUp = code === 38 || keyName === "ArrowUp";
   const isDown = code === 40 || keyName === "ArrowDown";
+
+  if (number) {
+    event.preventDefault();
+    event.stopPropagation();
+    assignReceiverTarget(number);
+    return;
+  }
 
   if (refreshLogMenuOpen) {
     if (isDown || isUp || isEnter) {
@@ -1634,7 +1831,7 @@ function handleRemoteKey(state, event) {
       if (isDown) {
         event.preventDefault();
         event.stopPropagation();
-        if (offlineLibrary.entries.length) {
+        if (sourceMenuEntries().length) {
           sourceMenuFocus = "sources";
           renderSourceMenu();
         } else {
@@ -1662,7 +1859,13 @@ function handleRemoteKey(state, event) {
     if (isDown) {
       event.preventDefault();
       event.stopPropagation();
-      closeSourceMenu();
+      if (sourceMenuFolder) {
+        sourceMenuFolder = sourceMenuParent();
+        sourceMenuIndex = 0;
+        renderSourceMenu();
+      } else {
+        closeSourceMenu();
+      }
       return;
     }
     if (isLeft) {
@@ -1689,8 +1892,13 @@ function handleRemoteKey(state, event) {
     if (isUp) {
       event.preventDefault();
       event.stopPropagation();
-      sourceMenuFocus = "actions";
-      sourceMenuActionIndex = 0;
+      if (sourceMenuFolder) {
+        sourceMenuFolder = sourceMenuParent();
+        sourceMenuIndex = 0;
+      } else {
+        sourceMenuFocus = "actions";
+        sourceMenuActionIndex = 0;
+      }
       renderSourceMenu();
       return;
     }
@@ -1865,6 +2073,12 @@ async function handleConnectedState(baseUrl, state) {
     console.warn("Offline library sync was not completed", error);
   });
 
+  // A dashboard stage deliberately takes priority over stale desktop state
+  // until a newer dashboard command arrives.
+  if (frontendStageActive) {
+    return;
+  }
+
   if (offlineActive && !state.media_url) {
     currentReceiverState = state;
     setStatus("Connected · Saved Source");
@@ -2000,6 +2214,7 @@ const initialConfig = loadConfig();
   await loadOfflineLibrary();
   await renderStoredOfflineSelection();
   startRefreshing(initialConfig);
+  startReceiverStageListener();
   void refreshGitHubSourcesOnLoad().catch((error) => {
     console.warn("GitHub source refresh was not completed", error);
     if (!currentReceiverState) {

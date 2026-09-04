@@ -9,12 +9,10 @@
       return false;
     }
     const relativePath = value.slice(GITHUB_SOURCES_PREFIX.length);
-    // The published library is deliberately flat.  Accepting subdirectories
-    // here would make it possible for a recursive GitHub tree query to expose
-    // files that are not shown by the repository's sources/ directory view.
+    // The caller supplies paths rooted at sources/. Every component must be
+    // visible; a recursive query of the sources subtree never sees repo code.
     return Boolean(relativePath)
-      && !relativePath.includes("/")
-      && !relativePath.startsWith(".");
+      && !relativePath.split("/").some((part) => !part || part.startsWith("."));
   }
 
   function githubSourceRelativePath(path) {

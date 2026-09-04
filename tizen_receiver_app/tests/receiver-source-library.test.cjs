@@ -7,7 +7,7 @@ const library = globalThis.MultiHubSourceLibrary;
 
 test("only sources directory blobs are published to the receiver", () => {
   assert.equal(library.isGitHubSourcePath("sources/demo.mp4"), true);
-  assert.equal(library.isGitHubSourcePath("sources/room-a/demo.mp4"), false);
+  assert.equal(library.isGitHubSourcePath("sources/room-a/demo.mp4"), true);
   assert.equal(library.isGitHubSourcePath("sources/.private.mp4"), false);
   assert.equal(library.isGitHubSourcePath("multihub/main_window.py"), false);
   assert.equal(library.isGitHubSourcePath("frontend/app/page.tsx"), false);

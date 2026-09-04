@@ -3,8 +3,8 @@ name: Publish TV source
 on:
   workflow_dispatch:
     inputs:
-      filename:
-        description: Flat filename to publish inside sources/
+      source_path:
+        description: Path relative to sources/ where this source will be published
         required: true
         type: string
       upload_url:
@@ -20,7 +20,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: publish-source-${{ inputs.filename }}
+  group: publish-source-${{ inputs.source_path }}
   cancel-in-progress: false
 
 jobs:
@@ -34,7 +34,7 @@ jobs:
 
       - name: Download and validate temporary source
         env:
-          SOURCE_FILENAME: ${{ inputs.filename }}
+          SOURCE_PATH: ${{ inputs.source_path }}
           UPLOAD_URL: ${{ inputs.upload_url }}
           SOURCE_MAX_BYTES: "99614720"
         shell: bash
@@ -42,27 +42,27 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           import os
-          from pathlib import Path
+          from pathlib import Path, PurePosixPath
+          import re
 
-          name = os.environ["SOURCE_FILENAME"]
+          source_path = os.environ["SOURCE_PATH"]
           allowed = {"mp4", "mov", "m4v", "webm", "mp3", "wav", "ogg", "jpg", "jpeg", "png", "gif", "bmp", "webp", "pdf", "ppt", "pptx"}
-          if not name or len(name) > 120 or name in {".", ".."}:
-              raise SystemExit("Invalid filename length.")
-          if name.startswith(".") or any(character in name for character in "/\\\x00"):
-              raise SystemExit("Source must use a visible flat filename.")
-          if any(ord(character) < 32 for character in name):
-              raise SystemExit("Source filename contains a control character.")
-          if name.rsplit(".", 1)[-1].lower() not in allowed:
+          parts = PurePosixPath(source_path).parts
+          if not source_path or len(parts) > 5 or any(part in {"", ".", ".."} for part in parts):
+              raise SystemExit("Invalid source path.")
+          if any(part.startswith(".") or not re.fullmatch(r"[\w][\w ._()'&-]{0,119}", part, re.UNICODE) for part in parts):
+              raise SystemExit("Source path contains an unsupported name.")
+          if parts[-1].rsplit(".", 1)[-1].lower() not in allowed:
               raise SystemExit("Unsupported source filename extension.")
-          Path("sources").mkdir(exist_ok=True)
-          target = Path("sources") / name
+          target = Path("sources", *parts)
+          target.parent.mkdir(parents=True, exist_ok=True)
           if target.exists():
-              raise SystemExit("A source with this filename already exists.")
+              raise SystemExit("A source with this path already exists.")
           print(f"SOURCE_TARGET={target}")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as output:
               output.write(f"SOURCE_TARGET={target}\n")
           PY
-          export SOURCE_TARGET="sources/${SOURCE_FILENAME}"
+          export SOURCE_TARGET="sources/${SOURCE_PATH}"
           curl --fail --location --proto '=https' --max-filesize "$SOURCE_MAX_BYTES" --output "${SOURCE_TARGET}.part" "$UPLOAD_URL"
           actual_size="$(stat -c%s "${SOURCE_TARGET}.part")"
           test "$actual_size" -gt 0
@@ -71,19 +71,19 @@ jobs:
 
       - name: Commit source to main
         env:
-          SOURCE_FILENAME: ${{ inputs.filename }}
+          SOURCE_PATH: ${{ inputs.source_path }}
         shell: bash
         run: |
           set -euo pipefail
           git pull --rebase origin main
-          if git ls-tree -r --name-only HEAD -- "sources/${SOURCE_FILENAME}" | grep -qx "sources/${SOURCE_FILENAME}"; then
-            echo "A source with this filename was published while this job was queued."
+          if git ls-tree -r --name-only HEAD -- "sources/${SOURCE_PATH}" | grep -qx "sources/${SOURCE_PATH}"; then
+            echo "A source with this path was published while this job was queued."
             exit 1
           fi
           git add -- "$SOURCE_TARGET"
           git config user.name "tv-source-dashboard[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "source-manager: add ${SOURCE_FILENAME}"
+          git commit -m "source-manager: add ${SOURCE_PATH}"
           git push origin HEAD:main
 
       - name: Remove temporary Vercel Blob

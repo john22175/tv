@@ -3,21 +3,21 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { isAuthenticated } from "@/lib/auth";
 import { dispatchSourcePublish, sourceExists } from "@/lib/github";
-import { assertSourceFilename, SOURCE_MAX_BYTES, SourceValidationError } from "@/lib/sources";
+import { assertSourcePath, SOURCE_MAX_BYTES, SourceValidationError } from "@/lib/sources";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type UploadPayload = { filename: string; requestId: string };
+type UploadPayload = { path: string; requestId: string };
 
 function parsePayload(value: string | null | undefined): UploadPayload {
   try {
     const parsed = JSON.parse(value || "{}") as Partial<UploadPayload>;
-    const filename = assertSourceFilename(parsed.filename);
+    const path = assertSourcePath(parsed.path);
     if (!/^[a-zA-Z0-9_-]{8,64}$/.test(String(parsed.requestId || ""))) {
       throw new SourceValidationError("Upload request identifier is invalid.");
     }
-    return { filename, requestId: String(parsed.requestId) };
+    return { path, requestId: String(parsed.requestId) };
   } catch (error) {
     if (error instanceof SourceValidationError) {
       throw error;
@@ -38,10 +38,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       request,
       onBeforeGenerateToken: async (pathname, clientPayload) => {
         const payload = parsePayload(clientPayload);
-        if (pathname !== `pending/${payload.requestId}/${payload.filename}`) {
+        if (pathname !== `pending/${payload.requestId}/${payload.path}`) {
           throw new SourceValidationError("Upload path does not match the approved source.");
         }
-        if (await sourceExists(payload.filename)) {
+        if (await sourceExists(payload.path)) {
           throw new SourceValidationError("A source with that filename already exists.");
         }
         return {
@@ -54,7 +54,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       onUploadCompleted: async ({ blob, tokenPayload }) => {
         const payload = parsePayload(String(tokenPayload || ""));
         await dispatchSourcePublish({
-          filename: payload.filename,
+          path: payload.path,
           requestId: payload.requestId,
           uploadUrl: blob.url,
         });
