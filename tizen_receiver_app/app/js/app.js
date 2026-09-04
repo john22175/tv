@@ -8,7 +8,7 @@ const GITHUB_OWNER = "john22175";
 const GITHUB_REPOSITORY = "tv";
 const GITHUB_BRANCH = "main";
 const GITHUB_COMMIT_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/commits/${GITHUB_BRANCH}`;
-const GITHUB_TREE_URL = (commitSha) => `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/git/trees/${encodeURIComponent(commitSha)}?recursive=1`;
+const GITHUB_SOURCES_URL = (commitSha) => `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/contents/sources?ref=${encodeURIComponent(commitSha)}`;
 const GITHUB_RAW_URL = (commitSha, path) => `https://raw.githubusercontent.com/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/${encodeURIComponent(commitSha)}/${path.split("/").map((part) => encodeURIComponent(part)).join("/")}`;
 
 const statusBadge = document.getElementById("statusBadge");
@@ -529,17 +529,17 @@ async function fetchGitHubLibraryManifest() {
     throw new Error("GitHub did not provide a commit revision.");
   }
 
-  const treeResponse = await fetch(GITHUB_TREE_URL(commitSha), { cache: "no-store" });
-  if (!treeResponse.ok) {
-    throw new Error(`GitHub source lookup returned HTTP ${treeResponse.status}.`);
+  // GitHub's Contents endpoint returns precisely the direct files displayed
+  // at github.com/<owner>/<repo>/tree/main/sources.  Do not use the recursive
+  // repository tree here: it contains receiver code and other repository data.
+  const sourcesResponse = await fetch(GITHUB_SOURCES_URL(commitSha), { cache: "no-store" });
+  if (!sourcesResponse.ok) {
+    throw new Error(`GitHub source lookup returned HTTP ${sourcesResponse.status}.`);
   }
-  const treePayload = await treeResponse.json();
-  if (treePayload && treePayload.truncated) {
-    throw new Error("GitHub source lookup was truncated; split the published source folders into a smaller repository.");
-  }
+  const sourcePayload = await sourcesResponse.json();
 
-  const entries = (Array.isArray(treePayload && treePayload.tree) ? treePayload.tree : [])
-    .filter((node) => node && node.type === "blob" && globalThis.MultiHubSourceLibrary.isGitHubSourcePath(String(node.path || "")))
+  const entries = (Array.isArray(sourcePayload) ? sourcePayload : [])
+    .filter((node) => node && node.type === "file" && globalThis.MultiHubSourceLibrary.isGitHubSourcePath(String(node.path || "")))
     .map((node) => {
       const path = String(node.path || "");
       const relativePath = globalThis.MultiHubSourceLibrary.githubSourceRelativePath(path);
