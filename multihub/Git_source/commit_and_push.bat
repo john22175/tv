@@ -29,10 +29,7 @@ if errorlevel 1 (
 
 git -C "%REPO%" add -A -- "%RELATIVE_DIR%"
 git -C "%REPO%" diff --cached --quiet
-if not errorlevel 1 (
-    echo No changes to commit in %~dp0
-    exit /b 0
-)
+if not errorlevel 1 goto :PUSH
 
 set "MESSAGE=%~1"
 if not defined MESSAGE set /p "MESSAGE=Commit message: "
@@ -41,6 +38,7 @@ if not defined MESSAGE set "MESSAGE=Update Git_source files"
 git -C "%REPO%" commit -m "%MESSAGE%"
 if errorlevel 1 exit /b 1
 
+:PUSH
 git -C "%REPO%" push origin HEAD
 if errorlevel 1 exit /b 1
 
