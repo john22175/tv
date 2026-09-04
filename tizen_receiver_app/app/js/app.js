@@ -820,8 +820,14 @@ async function requestGitHubSourceRefresh(trigger = "startup") {
   }
 }
 
-async function renderOfflineLibraryEntry(entry, { persistSelection = true } = {}) {
+async function renderOfflineLibraryEntry(entry, { persistSelection = true, dashboardStage = false } = {}) {
   if (!entry) {
+    return false;
+  }
+  // A stage command wins over any in-flight offline-library rendering. This
+  // matters during startup, when source hydration can complete after a
+  // picture-in-picture command has already painted the screen.
+  if (frontendStageActive && !dashboardStage) {
     return false;
   }
   offlineActive = true;
@@ -853,6 +859,9 @@ async function renderOfflineLibraryEntry(entry, { persistSelection = true } = {}
     ? await getStoredTizenOfflineFile(entry)
     : null;
   const blob = storedFile ? null : await getOfflineBlob(entry.content_hash);
+  if (frontendStageActive && !dashboardStage) {
+    return false;
+  }
   if (!storedFile && !blob) {
     renderCard("Saved Source Missing", `${entry.name} is not available in this TV's offline library.`);
     setStatus("Offline Storage Error", "error");
@@ -872,7 +881,7 @@ async function renderOfflineLibraryEntry(entry, { persistSelection = true } = {}
     library_content_hash: entry.content_hash,
     offline_local: true,
     offline_file: Boolean(storedFile),
-  }, { offline: true });
+  }, { offline: true, dashboardStage });
   setStatus("Offline · Saved");
   return true;
 }
@@ -1240,7 +1249,7 @@ async function applyFrontendStage(command) {
     entry = offlineLibrary.entries.find((candidate) => candidate.id === `github:${sourcePath}`);
   }
   if (entry) {
-    await renderOfflineLibraryEntry(entry, { persistSelection: true });
+    await renderOfflineLibraryEntry(entry, { persistSelection: true, dashboardStage: true });
     setStatus("Dashboard Stage");
     showRemoteFeedback(`${entry.name} staged from the dashboard.`);
     return;
@@ -1253,7 +1262,7 @@ async function applyFrontendStage(command) {
     media_url: String(command.mediaUrl || ""),
     playback_state: "playing",
     note: "Staged from the source dashboard.",
-  });
+  }, { dashboardStage: true });
   setStatus("Dashboard Stage");
 }
 
@@ -2071,7 +2080,10 @@ function handleRemoteKey(state, event) {
   }
 }
 
-function renderState(state, { offline = false } = {}) {
+function renderState(state, { offline = false, dashboardStage = false } = {}) {
+  if (frontendStageActive && !dashboardStage) {
+    return;
+  }
   currentReceiverState = state;
   offlineActive = offline;
   const playbackToken = statePlaybackToken(state);
@@ -2249,6 +2261,10 @@ async function refresh() {
     let state = await fetchStateOnce(activeBaseUrl, currentConfig.alias);
     await handleConnectedState(activeBaseUrl, state);
   } catch (error) {
+    if (frontendStageActive) {
+      setStatus("Dashboard Stage");
+      return;
+    }
     const fallbackUrl = fallbackBaseUrl(currentConfig.baseUrl);
     if (fallbackUrl && fallbackUrl !== currentConfig.baseUrl) {
       try {
@@ -2309,7 +2325,7 @@ async function refreshGitHubSourcesOnLoad() {
     }
     return;
   }
-  if (currentReceiverState && !offlineActive) {
+  if (frontendStageActive || (currentReceiverState && !offlineActive)) {
     return;
   }
   if (await renderStoredOfflineSelection()) {

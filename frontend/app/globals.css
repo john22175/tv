@@ -117,6 +117,16 @@ td:first-child { font-weight: 700; max-width: 400px; overflow-wrap: anywhere; }
 .pip-overlay-frame img, .pip-overlay-frame video { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
 .pip-overlay-label { position: absolute; z-index: 1; left: 0; right: 0; bottom: 0; padding: 4px 6px; background: #000b; color: #fff; font-size: clamp(.52rem, 1.2vw, .7rem); font-weight: 700; pointer-events: none; }
 .pip-resize-handle { position: absolute; right: -7px; bottom: -7px; width: 16px; height: 16px; border: 2px solid #111; background: var(--accent); cursor: nwse-resize; }
+.pip-source-shelf { display: grid; gap: 12px; padding: 18px; border: 1px solid #666; background: #0b0b0b; }
+.pip-source-shelf h3 { margin: 0; font-size: .95rem; text-transform: uppercase; letter-spacing: .07em; }
+.pip-source-shelf p { margin: 5px 0 0; color: var(--muted); font-size: .88rem; }
+.pip-source-list { display: flex; flex-wrap: wrap; gap: 9px; }
+.pip-source-chip { display: inline-flex; align-items: center; gap: 7px; max-width: 100%; border: 1px solid #666; border-radius: 3px; background: #1c1c1c; color: #fff; padding: 9px 11px; text-align: left; }
+.pip-source-chip:hover, .pip-source-chip:focus-visible { border-color: var(--accent); background: #30270a; outline: 0; }
+.pip-source-chip.base { border-color: var(--pale-blue); }
+.pip-source-chip.overlay { border-color: var(--accent); }
+.pip-source-kind { color: #111; background: var(--pale-blue); padding: 2px 5px; font-size: .67rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; }
+.pip-source-chip.overlay .pip-source-kind { background: var(--accent); }
 .pip-send-row { border-top: 1px solid #555; padding-top: 20px; }
 .pip-send-row p { margin: 0; }
 .pip-send-menu .push-options { min-width: 330px; }

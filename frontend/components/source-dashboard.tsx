@@ -88,15 +88,19 @@ function PictureInPicturePreview({
   layout,
   previewRef,
   onOverlayPointerDown,
+  onSourceDragOver,
+  onSourceDrop,
 }: {
   base: SourceRecord | undefined;
   overlay: SourceRecord | undefined;
   layout: PictureInPictureLayout;
   previewRef: React.RefObject<HTMLDivElement | null>;
   onOverlayPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
+  onSourceDragOver: (event: React.DragEvent<HTMLDivElement>) => void;
+  onSourceDrop: (event: React.DragEvent<HTMLDivElement>) => void;
 }) {
   return (
-    <div className="pip-preview" ref={previewRef} aria-label="Picture-in-picture preview">
+    <div className="pip-preview" ref={previewRef} aria-label="Picture-in-picture preview" onDragOver={onSourceDragOver} onDrop={onSourceDrop}>
       <div className="pip-preview-label">TV preview</div>
       {base?.downloadUrl ? sourcePreviewKind(base) === "image"
         ? <img className="pip-base" src={base.downloadUrl} alt={`Base: ${base.name}`} />
@@ -365,6 +369,42 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     } catch { return null; }
   }
 
+  function choosePictureInPictureSource(source: SourceRecord) {
+    if (!sourceIsPictureInPictureReady(source)) {
+      setUploadState("error"); setMessage("Picture-in-picture accepts image and video sources only."); return;
+    }
+    if (!baseSourcePath) {
+      setBaseSourcePath(source.path);
+      setMessage(`${source.name} selected as the base source.`);
+      return;
+    }
+    if (!overlaySourcePath && source.path !== baseSourcePath) {
+      setOverlaySourcePath(source.path);
+      setMessage(`${source.name} selected as the picture-in-picture source.`);
+      return;
+    }
+    if (source.path === baseSourcePath) {
+      setUploadState("error"); setMessage("Choose a different image or video for picture-in-picture."); return;
+    }
+    setOverlaySourcePath(source.path);
+    setMessage(`${source.name} replaced the picture-in-picture source.`);
+  }
+
+  function dragOverPictureInPicture(event: React.DragEvent<HTMLDivElement>) {
+    if (!event.dataTransfer.types.includes("application/x-tv-source")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+  }
+
+  function dropPictureInPictureSource(event: React.DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const source = draggedSource(event);
+    if (!source) {
+      setUploadState("error"); setMessage("Drag a published source from the source shelf onto the TV preview."); return;
+    }
+    choosePictureInPictureSource(source);
+  }
+
   const crumbs = folder ? folder.split("/") : [];
   const dashboardTabs = (
     <nav className="dashboard-tabs" aria-label="Dashboard views">
@@ -380,7 +420,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
         {dashboardTabs}
         <section className="pip-card">
           <div className="pip-heading">
-            <div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Choose a base source, position a second image or video above it, then send the composition to one or more TVs.</p></div>
+            <div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Choose sources from the lists or drag them onto the TV preview: the first drop is the base and the second is picture in picture.</p></div>
             <button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button>
           </div>
           {pictureInPictureFiles.length < 2 ? <p className="form-error">Add at least two image or video sources before creating picture-in-picture.</p> : null}
@@ -390,8 +430,14 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
               <label>Picture in picture<select value={overlaySourcePath} onChange={(event) => setOverlaySourcePath(event.target.value)}><option value="">Select the overlay source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === baseSourcePath}>{source.path}</option>)}</select></label>
               <div className="pip-position-readout"><span>Position</span><code>{Math.round(pictureInPictureLayout.x * 100)}% × {Math.round(pictureInPictureLayout.y * 100)}%</code><span>Size</span><code>{Math.round(pictureInPictureLayout.width * 100)}% × {Math.round(pictureInPictureLayout.height * 100)}%</code></div>
             </div>
-            <PictureInPicturePreview base={baseSource} overlay={overlaySource} layout={pictureInPictureLayout} previewRef={pictureInPicturePreviewRef} onOverlayPointerDown={beginPictureInPictureDrag} />
+            <PictureInPicturePreview base={baseSource} overlay={overlaySource} layout={pictureInPictureLayout} previewRef={pictureInPicturePreviewRef} onOverlayPointerDown={beginPictureInPictureDrag} onSourceDragOver={dragOverPictureInPicture} onSourceDrop={dropPictureInPictureSource} />
           </div>
+          <section className="pip-source-shelf" aria-label="Drag sources onto the composition">
+            <div><h3>Composition sources</h3><p>Drag an image or video to the TV preview, or click it to select it.</p></div>
+            <div className="pip-source-list">
+              {pictureInPictureFiles.map((source) => <button key={source.path} className={`pip-source-chip${source.path === baseSourcePath ? " base" : ""}${source.path === overlaySourcePath ? " overlay" : ""}`} type="button" draggable onDragStart={(event) => dragSource(event, source)} onClick={() => choosePictureInPictureSource(source)}><span className="drag-handle" aria-hidden="true">⠿</span><span className="pip-source-kind">{sourcePreviewKind(source) === "image" ? "Image" : "Video"}</span><span>{source.path}</span></button>)}
+            </div>
+          </section>
           <div className="pip-send-row">
             <p>{baseSource && overlaySource ? <><strong>{baseSource.name}</strong> as base with <strong>{overlaySource.name}</strong> as picture in picture.</> : "Choose a base source and a second picture-in-picture source."}</p>
             <details className="push-menu pip-send-menu">
