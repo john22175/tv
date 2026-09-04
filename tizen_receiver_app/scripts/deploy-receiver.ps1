@@ -158,9 +158,9 @@ foreach ($target in $targetsConfig.targets) {
         # Uninstall is deliberately tolerant: first-time installs report a non-zero exit code here.
         Invoke-TizenCommand $sdb @("-s", $serial, "uninstall", $packageId) -AllowFailure
         Invoke-TizenCommand $tizen @("install", "-n", $deployPackage, "-s", $serial)
-        # tizen run is unreliable with this CLI version; Samsung's app launcher
-        # opens the exact app ID directly on the selected TV.
-        Invoke-TizenCommand $sdb @("-s", $serial, "shell", "0", "app_launcher", "-s", $appId)
+        # `tizen run` and `app_launcher` are unreliable on these TVs. Samsung's
+        # documented SDB command launches the exact installed application ID.
+        Invoke-TizenCommand $sdb @("-s", $serial, "shell", "0", "execute", $appId)
         if ($WhatIfPreference) {
             Write-Host "What if: open $appId on $name."
         } else {
