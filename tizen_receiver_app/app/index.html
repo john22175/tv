@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MultiHub Receiver</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body tabindex="-1">
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">MultiHub Receiver</div>
+      <div class="meta">
+        <span id="statusBadge" class="badge">Starting</span>
+        <span id="aliasBadge" class="badge ghost">TV ?</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section id="playerView" class="player" tabindex="0">
+        <div id="viewport" class="viewport" tabindex="0"></div>
+        <div class="footer">
+          <div id="headline">Receiver Ready</div>
+          <div id="note">Waiting for the desktop app to send media to this TV.</div>
+        </div>
+      </section>
+    </main>
+    <aside id="sourceMenu" class="source-menu hidden" aria-label="Saved sources" aria-hidden="true">
+      <div class="source-menu-heading">
+        <span>Saved Sources</span>
+        <span id="sourceMenuPosition" class="source-menu-position"></span>
+      </div>
+      <div class="source-menu-actions" aria-label="Source actions, shown with saved sources">
+        <div id="refreshSourcesAction" class="source-menu-action" aria-label="Refresh sources">
+          <span>Refresh Sources</span>
+          <span class="source-menu-action-detail">GitHub</span>
+        </div>
+        <div id="viewRefreshLogsAction" class="source-menu-action" aria-label="View refresh logs">
+          <span>View Logs</span>
+          <span class="source-menu-action-detail">Refresh history</span>
+        </div>
+      </div>
+      <div id="sourceMenuItems" class="source-menu-items"></div>
+      <div class="source-menu-help">Red cards: refresh and logs &nbsp; Up: focus cards &nbsp; Left/Right: choose &nbsp; Enter: open</div>
+    </aside>
+    <aside id="refreshLogMenu" class="refresh-log-menu hidden" aria-label="GitHub refresh logs" aria-hidden="true">
+      <div class="source-menu-heading">
+        <span>GitHub Refresh Logs</span>
+        <span id="refreshLogPosition" class="source-menu-position"></span>
+      </div>
+      <div id="refreshLogItems" class="refresh-log-items"></div>
+      <div class="source-menu-help">Down: return to source actions</div>
+    </aside>
+  </div>
+
+  <script src="js/source-library.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

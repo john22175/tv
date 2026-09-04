@@ -51,6 +51,7 @@ from .connectors import (
 )
 from .media_server import MediaHTTPServer, OfflineLibrarySource, ServedMedia
 from .models import SourceItem, TVEndpoint
+from .source_paths import repository_sources_dir
 from .tv_registry import TVStateRegistry
 from .widgets import HubStage, SourceListWidget, card_shadow
 
@@ -970,8 +971,7 @@ class MainWindow(QMainWindow):
         self._autoload_default_sources()
 
     def _default_sources_dir(self) -> Path:
-        preferred = Path.cwd() / "Sources"
-        return preferred if preferred.exists() else Path.home()
+        return repository_sources_dir()
 
     def _normalize_source_path(self, path: Path) -> str:
         try:

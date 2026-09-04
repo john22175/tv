@@ -1,0 +1,41 @@
+# Local Windows helpers are never published by the project commit helper.
+*.bat
+
+# Python environments and caches.
+.venv/
+__pycache__/
+*.py[cod]
+
+# Source-dashboard build output and local credentials.
+frontend/node_modules/
+frontend/.next/
+frontend/.vercel/
+frontend/.env*
+!frontend/.env.example
+
+# Local deployment state.
+Upload/
+tizen_receiver_app/*
+!tizen_receiver_app/app/
+!tizen_receiver_app/app/**
+!tizen_receiver_app/scripts/
+!tizen_receiver_app/scripts/**
+!tizen_receiver_app/tests/
+!tizen_receiver_app/tests/**
+!tizen_receiver_app/README.md
+!tizen_receiver_app/deploy.targets.example.json
+tizen_receiver_app/deploy.targets.json
+
+# Tizen builds produce these inside the canonical project.
+tizen_receiver_app/app/.build/
+tizen_receiver_app/app/.buildResult/
+tizen_receiver_app/app/.package/
+tizen_receiver_app/app/.manifest.tmp
+tizen_receiver_app/app/signature*.xml
+tizen_receiver_app/app/author-signature.xml
+
+# Runtime diagnostics are local-only.
+logs/
+*.log
+*.out
+*.err
