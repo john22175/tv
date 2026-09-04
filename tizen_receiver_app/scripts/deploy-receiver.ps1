@@ -28,7 +28,8 @@ function Find-TizenTool([string]$Name) {
 }
 
 function Invoke-TizenCommand([string]$Tool, [string[]]$Arguments, [switch]$AllowFailure) {
-    $display = "`"$Tool`" " + ($Arguments | ForEach-Object { "`"$_`"" } | Join-String -Separator " ")
+    $argumentDisplay = ($Arguments | ForEach-Object { "`"$_`"" }) -join " "
+    $display = "`"$Tool`" $argumentDisplay"
     if ($WhatIfPreference) {
         Write-Host "What if: $display"
         return
@@ -37,6 +38,20 @@ function Invoke-TizenCommand([string]$Tool, [string[]]$Arguments, [switch]$Allow
     & $Tool @Arguments
     if ($LASTEXITCODE -ne 0 -and -not $AllowFailure) {
         throw "Command failed with exit code ${LASTEXITCODE}: $display"
+    }
+}
+
+function Confirm-SdbTarget([string]$SdbTool, [string]$Serial) {
+    if ($WhatIfPreference) {
+        Write-Host "What if: verify SDB target $Serial"
+        return
+    }
+    # sdb connect can report a network error but still return exit code 0.
+    # Verify the exact serial is visible before uninstalling anything.
+    $devices = (& $SdbTool devices | Out-String)
+    $serialPattern = "(?m)^" + [Regex]::Escape($Serial) + "\s+device\b"
+    if ($devices -notmatch $serialPattern) {
+        throw "SDB target '$Serial' is not connected in Developer Mode."
     }
 }
 
@@ -52,33 +67,68 @@ if (!$targetsConfig.targets -or $targetsConfig.targets.Count -eq 0) {
 $sdb = Find-TizenTool "sdb"
 $tizen = Find-TizenTool "tizen"
 
+$deployPackage = Join-Path $appDirectory "mhub_receiver_deploy.wgt"
+
 if (!$SkipBuild) {
     if (!$targetsConfig.certificateProfile) {
         throw "certificateProfile is required to build a signed receiver package."
     }
+    $buildStartedAt = (Get-Date).AddSeconds(-2)
     Invoke-TizenCommand $tizen @("build-web", "--", $appDirectory)
-    $buildDirectory = Join-Path $appDirectory ".build"
+    $buildDirectory = @(".buildResult", ".build") |
+        ForEach-Object { Join-Path $appDirectory $_ } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1
+    if (!$buildDirectory) {
+        throw "Tizen did not create a build output directory."
+    }
     Invoke-TizenCommand $tizen @("package", "-t", "wgt", "-s", [string]$targetsConfig.certificateProfile, "-o", $appDirectory, "--", $buildDirectory)
+    $generatedPackage = Get-ChildItem -LiteralPath $appDirectory -Filter "*.wgt" -File |
+        Where-Object { $_.LastWriteTime -ge $buildStartedAt -and $_.FullName -ne $deployPackage } |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -First 1
+    if (!$generatedPackage) {
+        throw "Tizen did not produce a WGT package."
+    }
+    # The Samsung installer accepts this package when its filename is simple;
+    # the generated display-name filename contains spaces and is rejected.
+    Copy-Item -LiteralPath $generatedPackage.FullName -Destination $deployPackage -Force
 }
 
-$package = Get-ChildItem -LiteralPath $appDirectory -Filter "*.wgt" -File | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-if (!$package) {
-    throw "No WGT package was found in $appDirectory. Build the receiver first or omit -SkipBuild."
+if (!(Test-Path -LiteralPath $deployPackage)) {
+    if ($WhatIfPreference) {
+        Write-Host "What if: use deployment package $deployPackage"
+    } else {
+        throw "Deployment package not found: $deployPackage. Build the receiver before using -SkipBuild."
+    }
 }
 
+$failures = @()
 foreach ($target in $targetsConfig.targets) {
     $name = [string]$target.name
-    $host = [string]$target.host
+    $targetHost = [string]$target.host
     $serial = [string]$target.serial
-    if (!$name -or !$host -or !$serial) {
+    if (!$name -or !$targetHost -or !$serial) {
         throw "Each target needs name, host, and serial values."
     }
 
-    Write-Host "`nDeploying MultiHub Receiver to $name ($serial)"
-    Invoke-TizenCommand $sdb @("connect", $host)
-    # Uninstall is deliberately tolerant: first-time installs report a non-zero exit code here.
-    Invoke-TizenCommand $sdb @("-s", $serial, "uninstall", $packageId) -AllowFailure
-    Invoke-TizenCommand $tizen @("install", "-n", $package.FullName, "-s", $serial)
-    Invoke-TizenCommand $tizen @("run", "-p", $packageId, "-s", $serial)
-    Write-Host "Opened $appId on $name."
+    try {
+        Write-Host "`nDeploying MultiHub Receiver to $name ($serial)"
+        Invoke-TizenCommand $sdb @("connect", $targetHost)
+        Confirm-SdbTarget $sdb $serial
+        # Uninstall is deliberately tolerant: first-time installs report a non-zero exit code here.
+        Invoke-TizenCommand $sdb @("-s", $serial, "uninstall", $packageId) -AllowFailure
+        Invoke-TizenCommand $tizen @("install", "-n", $deployPackage, "-s", $serial)
+        # tizen run is unreliable with this CLI version; Samsung's app launcher
+        # opens the exact app ID directly on the selected TV.
+        Invoke-TizenCommand $sdb @("-s", $serial, "shell", "0", "app_launcher", "-s", $appId)
+        Write-Host "Opened $appId on $name."
+    } catch {
+        $failures += "$name ($serial): $($_.Exception.Message)"
+        Write-Warning "Deployment failed for ${name}: $($_.Exception.Message)"
+    }
+}
+
+if ($failures.Count) {
+    throw ("Receiver deployment failed for: " + ($failures -join "; "))
 }
