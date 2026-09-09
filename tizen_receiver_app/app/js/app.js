@@ -555,7 +555,6 @@ async function fetchGitHubLibraryManifest() {
       const remoteOnly = isPictureInPictureRecipePath(relativePath)
         || isPresentationPath(relativePath)
         || isSlideShowRecipePath(relativePath);
-      const contentHash = String(node && node.sha || relativePath).replace(/[^a-zA-Z0-9_-]/g, "_");
       return {
         id: `github:${relativePath}`,
         name: relativePath,
@@ -698,6 +697,7 @@ async function fetchReceiverLibraryManifest() {
       const remoteOnly = isPictureInPictureRecipePath(relativePath)
         || isPresentationPath(relativePath)
         || isSlideShowRecipePath(relativePath);
+      const contentHash = String(node && node.sha || relativePath).replace(/[^a-zA-Z0-9_-]/g, "_");
       return {
         id: `github:${relativePath}`,
         name: relativePath,
