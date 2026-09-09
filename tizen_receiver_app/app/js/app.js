@@ -1000,11 +1000,6 @@ function sourceMenuParent() {
   return index < 0 ? "" : sourceMenuFolder.slice(0, index);
 }
 
-function sourceMenuNumberKey() {
-  const target = receiverTargetId();
-  return target ? target.slice(-1) : "";
-}
-
 function renderSourceMenu() {
   const entries = sourceMenuEntries();
   const actionFocused = sourceMenuFocus === "actions";
@@ -2229,19 +2224,6 @@ function handleRemoteKey(state, event) {
   const isRight = code === 39 || keyName === "ArrowRight";
   const isUp = code === 38 || keyName === "ArrowUp";
   const isDown = code === 40 || keyName === "ArrowDown";
-  const numberKey = /^[1-6]$/.test(keyName)
-    ? keyName
-    : (code >= 49 && code <= 54 ? String(code - 48) : "");
-
-  // A physical remote can only control the TV receiving its IR/Bluetooth
-  // command. The number is therefore a local guard: key N opens the menu on
-  // the package whose immutable receiver ID is tv-N, never on another TV.
-  if (numberKey && numberKey === sourceMenuNumberKey() && !sourceMenuOpen && !refreshLogMenuOpen) {
-    event.preventDefault();
-    event.stopPropagation();
-    openSourceMenu();
-    return;
-  }
 
   if (refreshLogMenuOpen) {
     if (isDown || isLeft || isEnter) {
@@ -2333,6 +2315,12 @@ function handleRemoteKey(state, event) {
     }
   }
 
+  if (isUp) {
+    event.preventDefault();
+    event.stopPropagation();
+    openSourceMenu();
+    return;
+  }
   if (isEnter) {
     event.preventDefault();
     event.stopPropagation();
@@ -2491,8 +2479,7 @@ async function refreshGitHubSourcesOnLoad() {
   offlineActive = false;
   stopActivePlayback();
   if (offlineLibrary.entries.length) {
-    const menuKey = sourceMenuNumberKey();
-    renderCard("GitHub Sources Ready", `${offlineLibrary.entries.length} source(s) are saved on this TV.${menuKey ? ` Press ${menuKey} to choose one.` : ""}`);
+    renderCard("GitHub Sources Ready", `${offlineLibrary.entries.length} source(s) are saved on this TV. Press Up to choose one.`);
     setStatus("GitHub Sources Loaded");
   } else {
     renderCard("GitHub Source Library Empty", "No source files are currently published in the GitHub repository.");
