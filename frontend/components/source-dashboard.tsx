@@ -188,6 +188,34 @@ function clipboardImageAsReusableOverlay(file: File): Promise<File> {
   });
 }
 
+/** Generate one high-resolution PNG, then store it at the durable PiP overlay path. */
+async function qrLinkAsReusableOverlay(linkInput: string): Promise<File> {
+  let link: URL;
+  try {
+    link = new URL(linkInput.trim());
+  } catch {
+    throw new Error("Enter a complete http:// or https:// link for the QR code.");
+  }
+  if (link.protocol !== "https:" && link.protocol !== "http:") {
+    throw new Error("QR links must use http:// or https://.");
+  }
+  const qrUrl = new URL("https://api.qrserver.com/v1/create-qr-code/");
+  qrUrl.searchParams.set("data", link.toString());
+  qrUrl.searchParams.set("size", "1200x1200");
+  qrUrl.searchParams.set("format", "png");
+  qrUrl.searchParams.set("ecc", "H");
+  qrUrl.searchParams.set("margin", "24");
+  const response = await fetch(qrUrl, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`QR image generation returned HTTP ${response.status}.`);
+  }
+  const image = await response.blob();
+  if (!image.size || !image.type.startsWith("image/")) {
+    throw new Error("QR image generation did not return a usable PNG.");
+  }
+  return new File([image], PICTURE_IN_PICTURE_OVERLAY_FILENAME, { type: "image/png" });
+}
+
 async function directGitHubUpload(file: File, path: string, onProgress: (percentage: number) => void, overwrite = false): Promise<void> {
   const authorization = await fetch("/api/uploads", {
     method: "POST",
@@ -275,6 +303,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [pictureInPictureLayout, setPictureInPictureLayout] = useState<PictureInPictureLayout>(DEFAULT_PICTURE_IN_PICTURE_LAYOUT);
   const [removeOverlayBackground, setRemoveOverlayBackground] = useState(false);
   const [overlayBackgroundColor, setOverlayBackgroundColor] = useState("#ffffff");
+  const [qrLink, setQrLink] = useState("");
   const [pictureInPictureDrag, setPictureInPictureDrag] = useState<PictureInPictureDrag | null>(null);
   const pictureInPicturePreviewRef = useRef<HTMLDivElement>(null);
 
@@ -375,6 +404,22 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
         : `${path} is published and ready to stage.`);
     } catch (error) {
       setUploadState("error"); setMessage(error instanceof Error ? error.message : "The upload could not be started.");
+    }
+  }
+
+  async function createQrPictureInPictureOverlay() {
+    try {
+      setUploadState("uploading");
+      setProgress(5);
+      setMessage("Generating QR overlay...");
+      const qrFile = await qrLinkAsReusableOverlay(qrLink);
+      // QR codes need their white quiet zone, so never carry forward an
+      // image-specific background-removal setting from a prior overlay.
+      setRemoveOverlayBackground(false);
+      await addSource(qrFile, "overlay", PICTURE_IN_PICTURE_DIRECTORY, true);
+    } catch (error) {
+      setUploadState("error");
+      setMessage(error instanceof Error ? error.message : "The QR overlay could not be generated.");
     }
   }
 
@@ -505,11 +550,12 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     return <section className="source-manager">
       {dashboardTabs}
       <section className="pip-card">
-        <div className="pip-heading"><div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Select published sources, then save the reusable <strong>Welcome_Filled</strong> composition in <code>Welcome/Temp</code>. Press <kbd>Ctrl</kbd> + <kbd>V</kbd> here to replace its reusable overlay image.</p></div><button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button></div>
+        <div className="pip-heading"><div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Select published sources, then save the reusable <strong>Welcome_Filled</strong> composition in <code>Welcome/Temp</code>. Press <kbd>Ctrl</kbd> + <kbd>V</kbd> here to replace its reusable overlay image, or generate a QR overlay from a link.</p></div><button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button></div>
         <div className="pip-workspace">
           <div className="pip-controls">
             <label>Base source<select value={baseSourcePath} onChange={(event) => setBaseSourcePath(event.target.value)}><option value="">Select full-screen source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === overlaySourcePath}>{source.path}</option>)}</select></label>
             <label>Picture in picture<select value={overlaySourcePath} onChange={(event) => setOverlaySourcePath(event.target.value)}><option value="">Select overlay source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === baseSourcePath}>{source.path}</option>)}</select></label>
+            <div className="pip-qr-control"><label>Link to QR<input type="url" inputMode="url" placeholder="https://example.com" value={qrLink} onChange={(event) => setQrLink(event.target.value)} /></label><button className="button secondary" type="button" disabled={!qrLink.trim() || uploadState === "uploading"} onClick={() => void createQrPictureInPictureOverlay()}>{uploadState === "uploading" ? "Creating QR..." : "Link to QR"}</button><small>Creates and selects a QR PNG at <code>{pictureInPictureOverlayPath()}</code>, replacing the prior pasted or QR overlay.</small></div>
             <p className="pip-fixed-path">Reusable PiP files are stored in <code>sources/{PICTURE_IN_PICTURE_DIRECTORY}/</code>: <code>{pictureInPictureOverlayPath()}</code> and <code>{pictureInPictureRecipePath()}</code>.</p>
             <label className="pip-checkbox"><input type="checkbox" checked={removeOverlayBackground} disabled={!overlaySource || !isImageSource(overlaySource)} onChange={(event) => setRemoveOverlayBackground(event.target.checked)} /> Remove Background</label>
             {removeOverlayBackground ? <label>Background color<input type="color" value={overlayBackgroundColor} onChange={(event) => setOverlayBackgroundColor(event.target.value)} /><small>Matching overlay-image pixels become transparent.</small></label> : null}

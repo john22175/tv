@@ -11,7 +11,7 @@ live in a private GitHub control repository.
 | Add media | Authenticated browser -> GitHub Contents API | One media commit; the source is immediately published. |
 | Refresh Sources on a TV | TV -> public source repository | The TV checks immediately, independently of Push To. |
 | Push To | Dashboard -> private control manifest -> Vercel endpoint -> TV | One manifest commit even when several TVs are selected. |
-| Picture in picture | Dashboard -> `Welcome/Temp/Welcome_Filled.pip.json` in the public source repository -> ordinary Push To | Replaces the one reusable recipe and overlay, then stages it. |
+| Picture in picture | Dashboard -> `Welcome/Temp/Welcome_Filled.pip.json` in the public source repository -> ordinary Push To | A selected source, pasted image, or generated link QR replaces the one reusable overlay, then stages it. |
 | PowerPoint slideshow | Dashboard -> `t-sources` GitHub Action -> rendered PNG slides -> TV | The uploaded `.ppt` or `.pptx` becomes a looping 10-second slideshow when rendering is ready. |
 | TV command check | TV -> Vercel every 60 seconds | No Blob read, status, or heartbeat write. |
 
