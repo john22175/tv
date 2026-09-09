@@ -1185,11 +1185,64 @@ function receiverStageUrl(target) {
   return baseUrl ? `${baseUrl}/api/receiver/${encodeURIComponent(target)}` : "";
 }
 
-function pictureInPictureStageElement(source, className) {
+function pictureInPictureBackgroundRemoval(value) {
+  const candidate = value && typeof value === "object" ? value : null;
+  const color = String(candidate && candidate.color || "").trim();
+  if (!/^#[0-9a-f]{6}$/i.test(color)) {
+    return null;
+  }
+  const tolerance = Number(candidate && candidate.tolerance);
+  return {
+    color: color.toLowerCase(),
+    tolerance: Number.isFinite(tolerance) ? Math.max(0, Math.min(128, Math.round(tolerance))) : 32,
+  };
+}
+
+function colorKeyedPictureInPictureImage(source, className, removal) {
+  const canvas = document.createElement("canvas");
+  canvas.className = className;
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute("aria-label", String(source && source.sourceName || source && source.sourcePath || "Picture in picture"));
+  const image = new Image();
+  image.crossOrigin = "anonymous";
+  image.onload = () => {
+    try {
+      const context = canvas.getContext("2d");
+      if (!context || !image.naturalWidth || !image.naturalHeight) return;
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      context.drawImage(image, 0, 0);
+      const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+      const hex = removal.color.slice(1);
+      const red = parseInt(hex.slice(0, 2), 16);
+      const green = parseInt(hex.slice(2, 4), 16);
+      const blue = parseInt(hex.slice(4, 6), 16);
+      for (let index = 0; index < pixels.data.length; index += 4) {
+        if (
+          Math.abs(pixels.data[index] - red) <= removal.tolerance
+          && Math.abs(pixels.data[index + 1] - green) <= removal.tolerance
+          && Math.abs(pixels.data[index + 2] - blue) <= removal.tolerance
+        ) {
+          pixels.data[index + 3] = 0;
+        }
+      }
+      context.putImageData(pixels, 0, 0);
+    } catch (error) {
+      console.warn("Could not remove the picture-in-picture background", error);
+    }
+  };
+  image.src = String(source && source.mediaUrl || "");
+  return canvas;
+}
+
+function pictureInPictureStageElement(source, className, removal = null) {
   const mimeType = String(source && source.mimeType || mimeTypeForName(source && source.sourcePath));
   const url = String(source && source.mediaUrl || "");
   if (!url) {
     return null;
+  }
+  if (removal && mimeType.startsWith("image/")) {
+    return colorKeyedPictureInPictureImage(source, className, removal);
   }
   const element = document.createElement(mimeType.startsWith("image/") ? "img" : "video");
   element.className = className;
@@ -1265,6 +1318,7 @@ async function renderPictureInPictureRecipe(command) {
     base,
     overlay,
     layout: recipe.layout,
+    removeBackground: recipe.removeBackground,
   });
 }
 
@@ -1272,7 +1326,7 @@ function renderPictureInPictureStage(command) {
   const base = command && command.base;
   const overlay = command && command.overlay;
   const baseElement = pictureInPictureStageElement(base, "picture-in-picture-base");
-  const overlayElement = pictureInPictureStageElement(overlay, "picture-in-picture-overlay");
+  const overlayElement = pictureInPictureStageElement(overlay, "picture-in-picture-overlay", pictureInPictureBackgroundRemoval(command && command.removeBackground));
   if (!baseElement || !overlayElement) {
     renderCard("Picture in Picture Error", "The dashboard command did not include two playable image or video sources.");
     setStatus("Picture in Picture Error", "error");

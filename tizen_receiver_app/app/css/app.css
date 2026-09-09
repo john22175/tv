@@ -149,6 +149,11 @@ body.media-active .viewport {
   object-fit: contain;
 }
 
+canvas.picture-in-picture-base,
+canvas.picture-in-picture-overlay {
+  object-fit: contain;
+}
+
 .picture-in-picture-overlay-frame {
   position: absolute;
   overflow: hidden;

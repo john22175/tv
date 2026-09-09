@@ -36,12 +36,14 @@ type GitHubCommit = { commit: { tree: { sha: string } } };
 type GitHubRef = { object: { sha: string } };
 
 type PictureInPictureLayout = { x: number; y: number; width: number; height: number };
+type PictureInPictureBackgroundRemoval = { color: string; tolerance: number };
 
 export type PictureInPictureRecipeInput = {
   destinationFolder: string;
   baseSourcePath: string;
   overlaySourcePath: string;
   layout: unknown;
+  removeBackground: unknown;
 };
 
 export type PictureInPictureRecipeResult = {
@@ -297,6 +299,19 @@ function normalizePictureInPictureLayout(value: unknown): PictureInPictureLayout
   };
 }
 
+function normalizePictureInPictureBackgroundRemoval(value: unknown): PictureInPictureBackgroundRemoval | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const color = String(candidate.color || "").trim();
+  if (!/^#[0-9a-f]{6}$/i.test(color)) {
+    throw new SourceValidationError("Choose a valid six-digit background color.");
+  }
+  return {
+    color: color.toLowerCase(),
+    tolerance: Math.round(clampLayoutNumber(candidate.tolerance, 32, 0, 128)),
+  };
+}
+
 /**
  * Save the composition as a portable source recipe. All managed PiP recipes
  * in the selected folder are replaced in a single Git commit, avoiding a
@@ -330,6 +345,7 @@ export async function savePictureInPictureRecipe(input: PictureInPictureRecipeIn
     baseSourcePath,
     overlaySourcePath,
     layout: normalizePictureInPictureLayout(input.layout),
+    removeBackground: normalizePictureInPictureBackgroundRemoval(input.removeBackground),
     updatedAt: new Date().toISOString(),
   };
   const { branch } = config();

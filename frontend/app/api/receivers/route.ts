@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
       overlaySourcePath?: unknown;
       destinationFolder?: unknown;
       layout?: unknown;
+      removeBackground?: unknown;
     };
     const receiverIds = Array.isArray(input.receiverIds)
       ? input.receiverIds.map((receiverId) => String(receiverId || ""))
@@ -42,6 +43,7 @@ export async function POST(request: NextRequest) {
         baseSourcePath: String(input.baseSourcePath || ""),
         overlaySourcePath: String(input.overlaySourcePath || ""),
         layout: input.layout,
+        removeBackground: input.removeBackground,
       });
       const commands = await stageSourceForReceivers({ receiverIds, sourcePath: recipe.path });
       return NextResponse.json({ commands, recipe }, { status: 201 });

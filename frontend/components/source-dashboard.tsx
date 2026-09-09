@@ -11,6 +11,7 @@ type FolderItem = { path: string; name: string; sha: string | null };
 type DashboardTab = "library" | "picture-in-picture";
 type PictureInPictureLayout = { x: number; y: number; width: number; height: number };
 type PictureInPictureDrag = { pointerId: number; mode: "move" | "resize"; originX: number; originY: number; layout: PictureInPictureLayout };
+type BackgroundRemoval = { color: string; tolerance: number };
 type DirectGitHubUpload = { contentUrl: string; branch: string; path: string; token: string; error?: string };
 
 const DEFAULT_PICTURE_IN_PICTURE_LAYOUT: PictureInPictureLayout = { x: 0.64, y: 0.06, width: 0.3, height: 0.3 };
@@ -48,6 +49,55 @@ function isPictureInPictureSource(source: SourceRecord): boolean {
 
 function isImageSource(source: Pick<SourceRecord, "name">): boolean {
   return ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(source.name.split(".").at(-1)?.toLowerCase() || "");
+}
+
+function colorChannels(color: string): [number, number, number] {
+  const match = /^#?([0-9a-f]{6})$/i.exec(color.trim());
+  const value = match?.[1] || "ffffff";
+  return [Number.parseInt(value.slice(0, 2), 16), Number.parseInt(value.slice(2, 4), 16), Number.parseInt(value.slice(4, 6), 16)];
+}
+
+function removeColorFromCanvas(canvas: HTMLCanvasElement, image: HTMLImageElement, removal: BackgroundRemoval) {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context || !image.naturalWidth || !image.naturalHeight) return;
+  canvas.width = image.naturalWidth;
+  canvas.height = image.naturalHeight;
+  context.drawImage(image, 0, 0);
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
+  const [red, green, blue] = colorChannels(removal.color);
+  for (let index = 0; index < pixels.data.length; index += 4) {
+    if (
+      Math.abs(pixels.data[index] - red) <= removal.tolerance
+      && Math.abs(pixels.data[index + 1] - green) <= removal.tolerance
+      && Math.abs(pixels.data[index + 2] - blue) <= removal.tolerance
+    ) {
+      pixels.data[index + 3] = 0;
+    }
+  }
+  context.putImageData(pixels, 0, 0);
+}
+
+function BackgroundRemovedImage({ source, className, alt, removal }: { source: SourceRecord; className?: string; alt: string; removal: BackgroundRemoval }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    let disposed = false;
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    image.onload = () => {
+      if (disposed) return;
+      try {
+        removeColorFromCanvas(canvas, image, removal);
+      } catch {
+        // If a remote host disallows canvas reads, leave a blank preview. The
+        // saved TV recipe still applies the same effect from GitHub raw media.
+      }
+    };
+    image.src = source.downloadUrl;
+    return () => { disposed = true; };
+  }, [removal, source.downloadUrl]);
+  return <canvas ref={canvasRef} className={className} role="img" aria-label={alt} />;
 }
 
 function MediaPreview({ source, className, alt }: { source: SourceRecord; className?: string; alt: string }) {
@@ -177,6 +227,8 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [overlaySourcePath, setOverlaySourcePath] = useState("");
   const [pictureInPictureFolder, setPictureInPictureFolder] = useState("");
   const [pictureInPictureLayout, setPictureInPictureLayout] = useState<PictureInPictureLayout>(DEFAULT_PICTURE_IN_PICTURE_LAYOUT);
+  const [removeOverlayBackground, setRemoveOverlayBackground] = useState(false);
+  const [overlayBackgroundColor, setOverlayBackgroundColor] = useState("#ffffff");
   const [pictureInPictureDrag, setPictureInPictureDrag] = useState<PictureInPictureDrag | null>(null);
   const pictureInPicturePreviewRef = useRef<HTMLDivElement>(null);
 
@@ -256,12 +308,12 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const baseSource = useMemo(() => pictureInPictureFiles.find((item) => item.path === baseSourcePath), [baseSourcePath, pictureInPictureFiles]);
   const overlaySource = useMemo(() => pictureInPictureFiles.find((item) => item.path === overlaySourcePath), [overlaySourcePath, pictureInPictureFiles]);
 
-  async function addSource(file: File | null, selectFor?: "base" | "overlay") {
+  async function addSource(file: File | null, selectFor?: "base" | "overlay", destinationFolder = folder) {
     if (!file) return;
     try {
       const filename = assertSourceFilename(file.name);
       assertSourceSize(file.size);
-      const path = childPath(folder, filename);
+      const path = childPath(destinationFolder, filename);
       if (files.some((item) => item.path === path)) throw new SourceValidationError("A source with that path already exists.");
       if (file.size > 50 * 1024 * 1024 && !window.confirm("This file is larger than 50 MiB. Direct GitHub upload Base64-encodes it in this browser, which can use substantial memory. Continue?")) return;
       setUploadState("uploading"); setProgress(0); setMessage(`Uploading ${path}...`);
@@ -274,6 +326,32 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
       setUploadState("error"); setMessage(error instanceof Error ? error.message : "The upload could not be started.");
     }
   }
+
+  useEffect(() => {
+    if (activeTab !== "picture-in-picture") return;
+    function pasteClipboardImage(event: ClipboardEvent) {
+      const focused = document.activeElement;
+      if (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement || focused instanceof HTMLSelectElement) return;
+      const item = Array.from(event.clipboardData?.items || []).find((candidate) => candidate.type.startsWith("image/"));
+      const image = item?.getAsFile();
+      if (!image) return;
+      const extensions: Record<string, string> = {
+        "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/bmp": "bmp", "image/webp": "webp",
+      };
+      const extension = extensions[image.type.toLowerCase()];
+      if (!extension) {
+        setUploadState("error");
+        setMessage("Clipboard images must be JPG, PNG, GIF, BMP, or WebP.");
+        return;
+      }
+      event.preventDefault();
+      const stamp = new Date().toISOString().replace(/[^0-9]/g, "");
+      const file = new File([image], `Pasted_${stamp}.${extension}`, { type: image.type });
+      void addSource(file, "overlay", pictureInPictureFolder);
+    }
+    window.addEventListener("paste", pasteClipboardImage);
+    return () => window.removeEventListener("paste", pasteClipboardImage);
+  }, [activeTab, files, folder, pictureInPictureFolder, refreshSources]);
 
   async function createFolder() {
     const name = window.prompt("Folder name", "");
@@ -354,7 +432,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
       setStaging(PICTURE_IN_PICTURE_SELECTION); setMessage(`Saving ${target} and staging it to ${receiverIds.length} TV${receiverIds.length === 1 ? "" : "s"}...`);
       const response = await fetch("/api/receivers", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "save-picture-in-picture", receiverIds, baseSourcePath: baseSource.path, overlaySourcePath: overlaySource.path, destinationFolder: pictureInPictureFolder, layout: pictureInPictureLayout }),
+        body: JSON.stringify({ kind: "save-picture-in-picture", receiverIds, baseSourcePath: baseSource.path, overlaySourcePath: overlaySource.path, destinationFolder: pictureInPictureFolder, layout: pictureInPictureLayout, removeBackground: removeOverlayBackground ? { color: overlayBackgroundColor, tolerance: 32 } : null }),
       });
       const payload = await response.json() as { error?: string; recipe?: { path?: string; replacedPaths?: string[] } };
       if (!response.ok) throw new Error(payload.error || "Could not save picture-in-picture.");
@@ -377,17 +455,17 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     return <section className="source-manager">
       {dashboardTabs}
       <section className="pip-card">
-        <div className="pip-heading"><div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Select a full-screen source and an overlay, then save the reusable composition as <strong>Welcome_Filled</strong> in a source folder. Saving replaces any older PiP recipes in that folder and stages the saved source normally.</p></div><button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button></div>
+        <div className="pip-heading"><div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Select published sources only, then save the reusable composition as <strong>Welcome_Filled</strong> in a source folder. Press <kbd>Ctrl</kbd> + <kbd>V</kbd> anywhere in this tab to save a clipboard image to that folder and use it as the overlay.</p></div><button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button></div>
         <div className="pip-workspace">
           <div className="pip-controls">
             <label>Base source<select value={baseSourcePath} onChange={(event) => setBaseSourcePath(event.target.value)}><option value="">Select full-screen source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === overlaySourcePath}>{source.path}</option>)}</select></label>
             <label>Picture in picture<select value={overlaySourcePath} onChange={(event) => setOverlaySourcePath(event.target.value)}><option value="">Select overlay source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === baseSourcePath}>{source.path}</option>)}</select></label>
             <label>Save in folder<select value={pictureInPictureFolder} onChange={(event) => setPictureInPictureFolder(event.target.value)}><option value="">sources (root)</option>{folders.map((item) => <option key={item.path} value={item.path}>{item.path}</option>)}</select><small>Creates <code>{childPath(pictureInPictureFolder, PICTURE_IN_PICTURE_RECIPE_FILENAME)}</code>.</small></label>
-            <label className="file-picker"><span>Add image as base</span><input type="file" accept=".jpg,.jpeg,.png,.gif,.bmp,.webp" disabled={uploadState === "uploading"} onChange={(event) => { void addSource(event.target.files?.[0] || null, "base"); event.currentTarget.value = ""; }} /></label>
-            <label className="file-picker"><span>Add image as overlay</span><input type="file" accept=".jpg,.jpeg,.png,.gif,.bmp,.webp" disabled={uploadState === "uploading"} onChange={(event) => { void addSource(event.target.files?.[0] || null, "overlay"); event.currentTarget.value = ""; }} /></label>
+            <label className="pip-checkbox"><input type="checkbox" checked={removeOverlayBackground} disabled={!overlaySource || !isImageSource(overlaySource)} onChange={(event) => setRemoveOverlayBackground(event.target.checked)} /> Remove Background</label>
+            {removeOverlayBackground ? <label>Background color<input type="color" value={overlayBackgroundColor} onChange={(event) => setOverlayBackgroundColor(event.target.value)} /><small>Matching overlay-image pixels become transparent.</small></label> : null}
             <div className="pip-position-readout"><span>Position</span><code>{Math.round(pictureInPictureLayout.x * 100)}% x {Math.round(pictureInPictureLayout.y * 100)}%</code><span>Size</span><code>{Math.round(pictureInPictureLayout.width * 100)}% x {Math.round(pictureInPictureLayout.height * 100)}%</code></div>
           </div>
-          <div ref={pictureInPicturePreviewRef} className="pip-preview" aria-label="Picture-in-picture preview"><div className="pip-preview-label">TV preview</div>{baseSource ? <MediaPreview className="pip-base" source={baseSource} alt={`Base: ${baseSource.name}`} /> : <div className="pip-empty">Choose a base source</div>}{overlaySource ? <div className="pip-overlay-frame" style={{ left: `${pictureInPictureLayout.x * 100}%`, top: `${pictureInPictureLayout.y * 100}%`, width: `${pictureInPictureLayout.width * 100}%`, height: `${pictureInPictureLayout.height * 100}%` }} onPointerDown={beginPictureInPictureDrag} role="presentation"><MediaPreview source={overlaySource} alt={`Overlay: ${overlaySource.name}`} /><span className="pip-overlay-label">Picture in picture · drag to move</span><span className="pip-resize-handle" aria-label="Drag to resize" /></div> : null}</div>
+          <div ref={pictureInPicturePreviewRef} className="pip-preview" aria-label="Picture-in-picture preview"><div className="pip-preview-label">TV preview</div>{baseSource ? <MediaPreview className="pip-base" source={baseSource} alt={`Base: ${baseSource.name}`} /> : <div className="pip-empty">Choose a base source</div>}{overlaySource ? <div className="pip-overlay-frame" style={{ left: `${pictureInPictureLayout.x * 100}%`, top: `${pictureInPictureLayout.y * 100}%`, width: `${pictureInPictureLayout.width * 100}%`, height: `${pictureInPictureLayout.height * 100}%` }} onPointerDown={beginPictureInPictureDrag} role="presentation">{removeOverlayBackground && isImageSource(overlaySource) ? <BackgroundRemovedImage className="pip-overlay-image" source={overlaySource} alt={`Overlay: ${overlaySource.name}`} removal={{ color: overlayBackgroundColor, tolerance: 32 }} /> : <MediaPreview source={overlaySource} alt={`Overlay: ${overlaySource.name}`} />}<span className="pip-overlay-label">Picture in picture · drag to move</span><span className="pip-resize-handle" aria-label="Drag to resize" /></div> : null}</div>
         </div>
         <div className="pip-send-row"><p>{baseSource && overlaySource ? <><strong>{baseSource.name}</strong> as base with <strong>{overlaySource.name}</strong> as picture in picture. The saved source will be <strong>Welcome_Filled</strong>.</> : "Choose a base source and a second picture-in-picture source."}</p><details className="push-menu pip-send-menu"><summary className="button secondary">Save &amp; Stage{selectedPictureInPictureReceivers.length ? ` (${selectedPictureInPictureReceivers.length})` : ""}</summary><ReceiverPicker receivers={receivers} receiverError={receiverError} selected={selectedPictureInPictureReceivers} disabled={staging !== null} selectionKey={PICTURE_IN_PICTURE_SELECTION} onToggle={toggleReceiver} onRefresh={() => void refreshReceivers()} />{receivers.length && !receiverError ? <button className="button push-submit" type="button" disabled={!baseSource || !overlaySource || !selectedPictureInPictureReceivers.length || staging !== null} onClick={() => void saveAndStagePictureInPicture(selectedPictureInPictureReceivers)}>{staging === PICTURE_IN_PICTURE_SELECTION ? "Saving..." : `Save and stage for ${selectedPictureInPictureReceivers.length} TV${selectedPictureInPictureReceivers.length === 1 ? "" : "s"}`}</button> : null}</details></div>
         {uploadState === "uploading" ? <progress value={progress} max="100" /> : null}{message ? <p className={uploadState === "error" ? "form-error" : "status-message"}>{message}</p> : null}
