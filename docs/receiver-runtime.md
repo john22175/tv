@@ -17,9 +17,15 @@ These locations must agree:
 | Receiver fallback package config | `tizen_receiver_app/app/js/source-repository.js`: `john22175/t-sources`, branch `main` |
 
 The dashboard source library and TV **Refresh Sources** both enumerate the
-same `t-sources/sources/` tree. If their file lists differ, first confirm the
-TV has the current receiver package, then press **Refresh Sources** on that
-TV. Do not use the retired `tv/sources/` tree as a repair source.
+same `t-sources/sources/` tree. The dashboard does this directly with its
+server-side GitHub credentials. TVs request Vercel's public
+`/api/receiver-library` index, which is cached for 60 seconds; Vercel uses
+those credentials to read the tree and each TV still downloads media from the
+public `t-sources` raw URL. This avoids GitHub's 60-per-hour shared-IP limit
+for unauthenticated REST calls. If their file lists differ, first confirm the
+TV has the current receiver package, wait up to one minute for the index cache,
+then press **Refresh Sources** on that TV. Do not use the retired `tv/sources/`
+tree as a repair source.
 
 ## Reusable picture in picture
 
@@ -83,7 +89,7 @@ The receiver no longer contacts the retired local desktop endpoint at
 
 | Trigger | Destination | Purpose |
 | --- | --- | --- |
-| Startup and TV **Refresh Sources** | Public `t-sources` | Read and cache the source tree and changed media. |
+| Startup and TV **Refresh Sources** | Vercel `/api/receiver-library`, then public `t-sources` raw media | Read the 60-second-cached source index and cache changed media. TVs do not call GitHub's REST API directly. |
 | Every 60 seconds, plus startup | Vercel `/api/receiver/tv-N` | Read the current command from the cached private control manifest. |
 | Dashboard action | GitHub/Vercel | Upload media or write/stage a control-manifest command. |
 

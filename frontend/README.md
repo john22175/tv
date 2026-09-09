@@ -107,6 +107,10 @@ this check.
   large uploads on the actual dashboard computer before relying on them.
 - Keep ordinary GitHub media repositories comfortably below 1 GB and avoid
   Git LFS: the receiver downloads regular public GitHub raw URLs.
+- TV source refreshes use Vercel's public `/api/receiver-library` index, cached
+  for 60 seconds, before downloading changed media from `t-sources`. This
+  prevents all TVs on one network from exhausting GitHub's unauthenticated
+  REST API limit.
 - A Push To action produces one private-manifest commit for all selected TVs.
   Do not add a per-TV write loop or background heartbeat.
 - A newly pushed command arrives on the next command check—normally within

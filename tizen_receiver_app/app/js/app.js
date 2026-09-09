@@ -664,6 +664,68 @@ async function applyOfflineLibraryManifest(manifest) {
   }
 }
 
+// The TV must not enumerate GitHub's public REST API itself: all receivers
+// commonly share one public IP, which is limited to 60 unauthenticated REST
+// requests per hour. Vercel obtains the same t-sources index with the
+// dashboard's server-only credentials and caches it for 60 seconds.
+async function fetchReceiverLibraryManifest() {
+  const indexUrl = receiverLibraryUrl();
+  if (!indexUrl) {
+    throw new Error("Receiver source index is not configured.");
+  }
+  // Honor the endpoint's one-minute HTTP cache. A manual refresh should not
+  // turn into another GitHub lookup for each of the six receivers.
+  const response = await fetch(indexUrl, { cache: "default" });
+  if (!response.ok) {
+    throw new Error(`Receiver source index returned HTTP ${response.status}.`);
+  }
+  const payload = await response.json();
+  const indexRevision = String(payload && payload.revision || "").trim();
+  if (!indexRevision || !Array.isArray(payload && payload.files)) {
+    throw new Error("Receiver source index returned an invalid manifest.");
+  }
+
+  const entries = payload.files
+    .map((node) => {
+      const relativePath = String(node && node.path || "").trim().replace(/^\/+|\/+$/g, "");
+      const sourcePath = `sources/${relativePath}`;
+      if (!relativePath || !globalThis.MultiHubSourceLibrary.isGitHubSourcePath(sourcePath) || isSlideShowRecipePath(relativePath)) {
+        return null;
+      }
+      const size = Number(node && node.size);
+      const mimeType = mimeTypeForName(relativePath);
+      const remoteOnly = isPictureInPictureRecipePath(relativePath)
+        || isPresentationPath(relativePath)
+        || isSlideShowRecipePath(relativePath);
+      return {
+        id: `github:${relativePath}`,
+        name: relativePath,
+        mime_type: mimeType,
+        size: Number.isFinite(size) && size >= 0 ? size : 0,
+        content_hash: String(node && node.sha || relativePath).replace(/[^a-zA-Z0-9_-]/g, "_"),
+        playable: isPlayableMimeType(mimeType),
+        remote_only: remoteOnly,
+        // Public raw content remains the media delivery path. The cached
+        // Vercel endpoint supplies only directory metadata, never media bytes.
+        media_url: GITHUB_RAW_URL(GITHUB_BRANCH, sourcePath),
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => String(left.id).localeCompare(String(right.id)));
+  const folders = (Array.isArray(payload && payload.folders) ? payload.folders : [])
+    .map((node) => String(node && node.path || "").trim().replace(/^\/+|\/+$/g, ""))
+    .filter((path) => path && globalThis.MultiHubSourceLibrary.isGitHubSourcePath(`sources/${path}`))
+    .sort();
+
+  return {
+    receiver_id: "vercel-source-index",
+    revision: `source-index:${indexRevision}`,
+    request_id: `source-index:${indexRevision}`,
+    entries,
+    folders,
+  };
+}
+
 async function applyLibrarySync(manifest, { retryFailedRevision = false } = {}) {
   const requestId = String(manifest.request_id || "");
   const revision = String(manifest.revision || "");
@@ -754,7 +816,7 @@ async function runLibrarySync(loadManifest, options = {}) {
 }
 
 async function syncGitHubOfflineLibrary({ retryFailedRevision = false } = {}) {
-  return runLibrarySync(fetchGitHubLibraryManifest, { retryFailedRevision });
+  return runLibrarySync(fetchReceiverLibraryManifest, { retryFailedRevision });
 }
 
 async function requestGitHubSourceRefresh(trigger = "startup") {
@@ -764,10 +826,10 @@ async function requestGitHubSourceRefresh(trigger = "startup") {
   }
 
   const isManual = trigger === "manual";
-  recordGitHubRefreshLog(isManual ? "Manual refresh started: checking GitHub main." : "Startup refresh started: checking GitHub main.");
+  recordGitHubRefreshLog(isManual ? "Manual refresh started: checking the cached source index." : "Startup refresh started: checking the cached source index.");
   try {
     const changed = await syncGitHubOfflineLibrary({ retryFailedRevision: isManual });
-    const revision = String(offlineLibrary.revision || "").replace(/^github:/, "").slice(0, 12);
+    const revision = String(offlineLibrary.revision || "").replace(/^(github|source-index):/, "").slice(0, 12);
     const summary = `${offlineLibrary.entries.length} source(s)${revision ? ` at ${revision}` : ""}`;
     recordGitHubRefreshLog(changed ? `Refresh completed: saved ${summary}.` : `Refresh completed: ${summary} already current.`);
     return { changed, alreadyRunning: false };
@@ -1128,6 +1190,12 @@ function pictureInPictureBackgroundRemoval(value) {
     color: color.toLowerCase(),
     tolerance: Number.isFinite(tolerance) ? Math.max(0, Math.min(128, Math.round(tolerance))) : 32,
   };
+}
+
+function receiverLibraryUrl() {
+  const control = globalThis.MultiHubReceiverControl || {};
+  const baseUrl = String(control.baseUrl || "").replace(/\/+$/, "");
+  return baseUrl ? `${baseUrl}/api/receiver-library` : "";
 }
 
 function colorKeyedPictureInPictureImage(source, className, removal) {
