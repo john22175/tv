@@ -1,6 +1,7 @@
 const STORAGE_KEYS = {
   baseUrl: "multihub.baseUrl",
   alias: "multihub.receiverAlias",
+  localSourceOverrideRevision: "multihub.localSourceOverrideRevision",
 };
 const DEFAULT_BASE_PORT = 65331;
 const DEFAULT_BASE_URL = "http://10.171.64.201:65331";
@@ -505,7 +506,11 @@ async function fetchLibraryManifestOnce(baseUrl, alias) {
 }
 
 function mimeTypeForName(name) {
-  const suffix = String(name || "").toLowerCase().split(".").pop() || "";
+  const normalizedName = String(name || "").toLowerCase();
+  if (normalizedName.endsWith(".pip.json")) {
+    return "application/vnd.multihub.picture-in-picture+json";
+  }
+  const suffix = normalizedName.split(".").pop() || "";
   const types = {
     mp4: "video/mp4",
     mov: "video/quicktime",
@@ -527,7 +532,30 @@ function mimeTypeForName(name) {
 
 function isPlayableMimeType(mimeType) {
   const value = String(mimeType || "").toLowerCase();
-  return ["image/", "video/", "audio/"].some((prefix) => value.startsWith(prefix));
+  return value === "application/vnd.multihub.picture-in-picture+json"
+    || ["image/", "video/", "audio/"].some((prefix) => value.startsWith(prefix));
+}
+
+function isPictureInPictureRecipePath(path) {
+  return String(path || "").toLowerCase().endsWith(".pip.json");
+}
+
+function loadLocalSourceOverrideRevision() {
+  try {
+    return String(localStorage.getItem(STORAGE_KEYS.localSourceOverrideRevision) || "");
+  } catch (error) {
+    return "";
+  }
+}
+
+function saveLocalSourceOverrideRevision(revision) {
+  try {
+    if (revision) {
+      localStorage.setItem(STORAGE_KEYS.localSourceOverrideRevision, String(revision));
+    } else {
+      localStorage.removeItem(STORAGE_KEYS.localSourceOverrideRevision);
+    }
+  } catch (error) {}
 }
 
 async function fetchGitHubLibraryManifest() {
@@ -821,14 +849,14 @@ async function requestGitHubSourceRefresh(trigger = "startup") {
   }
 }
 
-async function renderOfflineLibraryEntry(entry, { persistSelection = true, dashboardStage = false } = {}) {
+async function renderOfflineLibraryEntry(entry, { persistSelection = true, dashboardStage = false, manualSelection = false } = {}) {
   if (!entry) {
     return false;
   }
   // A stage command wins over any in-flight offline-library rendering. This
   // matters during startup, when source hydration can complete after a
   // picture-in-picture command has already painted the screen.
-  if (frontendStageActive && !dashboardStage) {
+  if (frontendStageActive && !dashboardStage && !manualSelection) {
     return false;
   }
   offlineActive = true;
@@ -838,6 +866,21 @@ async function renderOfflineLibraryEntry(entry, { persistSelection = true, dashb
       await persistOfflineLibraryMeta();
     } catch (error) {
       console.warn("Could not save the offline selection", error);
+    }
+  }
+  if (isPictureInPictureRecipePath(entry.name)) {
+    try {
+      await renderPictureInPictureRecipe({
+        revision: `library:${String(entry.content_hash || entry.id || entry.name)}`,
+        sourcePath: entry.name,
+      });
+      setStatus("Picture in Picture");
+      showRemoteFeedback(`${entry.name} selected from this TV.`);
+      return true;
+    } catch (error) {
+      renderCard("Picture in Picture Error", String(error && error.message || error || "The saved recipe could not be loaded."));
+      setStatus("Picture in Picture Error", "error");
+      return false;
     }
   }
   if (!entry.playable) {
@@ -860,7 +903,7 @@ async function renderOfflineLibraryEntry(entry, { persistSelection = true, dashb
     ? await getStoredTizenOfflineFile(entry)
     : null;
   const blob = storedFile ? null : await getOfflineBlob(entry.content_hash);
-  if (frontendStageActive && !dashboardStage) {
+  if (frontendStageActive && !dashboardStage && !manualSelection) {
     return false;
   }
   if (!storedFile && !blob) {
@@ -882,7 +925,7 @@ async function renderOfflineLibraryEntry(entry, { persistSelection = true, dashb
     library_content_hash: entry.content_hash,
     offline_local: true,
     offline_file: Boolean(storedFile),
-  }, { offline: true, dashboardStage });
+  }, { offline: true, dashboardStage: dashboardStage || manualSelection });
   setStatus("Offline · Saved");
   return true;
 }
@@ -1027,7 +1070,13 @@ async function chooseSourceMenuItem() {
     return;
   }
   closeSourceMenu();
-  await renderOfflineLibraryEntry(entry);
+  // Choosing a source with the TV remote is an explicit local decision. Keep
+  // it in front of the already-seen dashboard stage until the dashboard sends
+  // a different revision.
+  if (frontendStageRevision) {
+    saveLocalSourceOverrideRevision(frontendStageRevision);
+  }
+  await renderOfflineLibraryEntry(entry, { manualSelection: true });
 }
 
 function openRefreshLogMenu() {
@@ -1175,6 +1224,50 @@ function pictureInPictureLayout(command) {
   };
 }
 
+function pictureInPictureSourceForPath(value) {
+  const sourcePath = String(value || "").trim().replace(/^\/+|\/+$/g, "");
+  if (!sourcePath || sourcePath.split("/").some((part) => !part || part === "." || part === ".." || part.startsWith("."))) {
+    return null;
+  }
+  const mimeType = mimeTypeForName(sourcePath);
+  if (!mimeType.startsWith("image/") && !mimeType.startsWith("video/")) {
+    return null;
+  }
+  return {
+    sourcePath,
+    sourceName: sourcePath.split("/").pop() || sourcePath,
+    mediaUrl: GITHUB_RAW_URL(GITHUB_BRANCH, `sources/${sourcePath}`),
+    mimeType,
+  };
+}
+
+async function renderPictureInPictureRecipe(command) {
+  const sourcePath = String(command && command.sourcePath || "");
+  if (!isPictureInPictureRecipePath(sourcePath)) {
+    throw new Error("The selected source is not a picture-in-picture recipe.");
+  }
+  // Resolve the recipe from the configured public source repository rather
+  // than trusting a URL supplied by a command manifest.
+  const recipeUrl = GITHUB_RAW_URL(GITHUB_BRANCH, `sources/${sourcePath}`);
+  const response = await fetch(recipeUrl, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Picture-in-picture recipe returned HTTP ${response.status}.`);
+  }
+  const recipe = await response.json();
+  const base = pictureInPictureSourceForPath(recipe && recipe.baseSourcePath);
+  const overlay = pictureInPictureSourceForPath(recipe && recipe.overlaySourcePath);
+  if (!recipe || recipe.kind !== "picture-in-picture" || Number(recipe.version) !== 1 || !base || !overlay || base.sourcePath === overlay.sourcePath) {
+    throw new Error("The picture-in-picture recipe is invalid or references unsupported sources.");
+  }
+  renderPictureInPictureStage({
+    kind: "picture-in-picture",
+    revision: String(command && command.revision || `recipe:${sourcePath}`),
+    base,
+    overlay,
+    layout: recipe.layout,
+  });
+}
+
 function renderPictureInPictureStage(command) {
   const base = command && command.base;
   const overlay = command && command.overlay;
@@ -1237,6 +1330,11 @@ async function applyFrontendStage(command) {
   }
   frontendStageRevision = revision;
   frontendStageActive = true;
+  if (loadLocalSourceOverrideRevision() === revision) {
+    recordGitHubRefreshLog(`TV source selection retained over dashboard stage: ${sourcePath}.`);
+    return;
+  }
+  saveLocalSourceOverrideRevision("");
   if (isPictureInPicture) {
     const overlayPath = String(command && command.overlay && command.overlay.sourcePath || "");
     recordGitHubRefreshLog(`Dashboard staged picture in picture: ${sourcePath} + ${overlayPath}.`);
@@ -1244,6 +1342,20 @@ async function applyFrontendStage(command) {
     return;
   }
   recordGitHubRefreshLog(`Dashboard staged ${sourcePath}.`);
+  if (isPictureInPictureRecipePath(sourcePath)) {
+    try {
+      await renderPictureInPictureRecipe(command);
+      setStatus("Dashboard Stage");
+      showRemoteFeedback(`${sourcePath} staged from the dashboard.`);
+    } catch (error) {
+      frontendStageActive = false;
+      frontendStageRevision = "";
+      renderCard("Picture in Picture Error", String(error && error.message || error || "The saved recipe could not be loaded."));
+      setStatus("Picture in Picture Error", "error");
+      throw error;
+    }
+    return;
+  }
   let entry = offlineLibrary.entries.find((candidate) => candidate.id === `github:${sourcePath}`);
   if (!entry) {
     await syncGitHubOfflineLibrary({ retryFailedRevision: true });

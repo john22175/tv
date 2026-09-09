@@ -11,6 +11,7 @@ live in a private GitHub control repository.
 | Add media | Authenticated browser -> GitHub Contents API | One media commit; the source is immediately published. |
 | Refresh Sources on a TV | TV -> public source repository | The TV checks immediately, independently of Push To. |
 | Push To | Dashboard -> private control manifest -> Vercel endpoint -> TV | One manifest commit even when several TVs are selected. |
+| Picture in picture | Dashboard -> `Welcome_Filled.pip.json` in the public source repository -> ordinary Push To | Replaces older PiP recipes in the selected folder, then stages the saved recipe. |
 | TV command check | TV -> Vercel every 60 seconds | No Blob read, status, or heartbeat write. |
 
 The dashboard works from any internet connection. TVs do not need to share

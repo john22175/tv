@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { assertSourceDirectory, assertSourceFilename, assertSourcePath, assertSourceSize, sourcePath, SOURCE_MAX_BYTES } from "@/lib/sources";
+import {
+  assertSourceDirectory,
+  assertSourceFilename,
+  assertSourcePath,
+  assertSourceSize,
+  isPictureInPictureRecipePath,
+  pictureInPictureRecipePath,
+  sourceMimeType,
+  sourcePath,
+  SOURCE_MAX_BYTES,
+} from "@/lib/sources";
 
 describe("source validation", () => {
   it("accepts supported source paths below sources/", () => {
@@ -24,5 +34,12 @@ describe("source validation", () => {
     expect(assertSourceSize(SOURCE_MAX_BYTES)).toBe(SOURCE_MAX_BYTES);
     expect(() => assertSourceSize(SOURCE_MAX_BYTES + 1)).toThrow();
     expect(() => assertSourceSize(0)).toThrow();
+  });
+
+  it("accepts the generated PiP recipe as a source with a fixed destination name", () => {
+    expect(assertSourcePath("Welcome/Welcome_Filled.pip.json")).toBe("Welcome/Welcome_Filled.pip.json");
+    expect(pictureInPictureRecipePath("Welcome")).toBe("Welcome/Welcome_Filled.pip.json");
+    expect(isPictureInPictureRecipePath("Welcome/Welcome_Filled.pip.json")).toBe(true);
+    expect(sourceMimeType("Welcome/Welcome_Filled.pip.json")).toBe("application/vnd.multihub.picture-in-picture+json");
   });
 });

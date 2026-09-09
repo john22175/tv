@@ -14,6 +14,7 @@ type DirectGitHubUpload = { contentUrl: string; branch: string; path: string; to
 
 const DEFAULT_PICTURE_IN_PICTURE_LAYOUT: PictureInPictureLayout = { x: 0.64, y: 0.06, width: 0.3, height: 0.3 };
 const PICTURE_IN_PICTURE_SELECTION = "picture-in-picture";
+const PICTURE_IN_PICTURE_RECIPE_FILENAME = "Welcome_Filled.pip.json";
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -169,6 +170,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [selectedReceiverIds, setSelectedReceiverIds] = useState<Record<string, string[]>>({});
   const [baseSourcePath, setBaseSourcePath] = useState("");
   const [overlaySourcePath, setOverlaySourcePath] = useState("");
+  const [pictureInPictureFolder, setPictureInPictureFolder] = useState("");
   const [pictureInPictureLayout, setPictureInPictureLayout] = useState<PictureInPictureLayout>(DEFAULT_PICTURE_IN_PICTURE_LAYOUT);
 
   const files = useMemo(() => sources.filter((item) => item.kind === "file"), [sources]);
@@ -284,46 +286,50 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     } catch (error) { setUploadState("error"); setMessage(error instanceof Error ? error.message : "Could not stage the source."); } finally { setStaging(null); }
   }
 
-  async function stagePictureInPicture(receiverIds: string[]) {
+  async function saveAndStagePictureInPicture(receiverIds: string[]) {
     if (!baseSource || !overlaySource || !receiverIds.length) return;
     if (baseSource.path === overlaySource.path) { setUploadState("error"); setMessage("Choose two different sources for picture-in-picture."); return; }
     try {
-      setStaging(PICTURE_IN_PICTURE_SELECTION); setMessage(`Staging picture-in-picture to ${receiverIds.length} TV${receiverIds.length === 1 ? "" : "s"}...`);
+      const target = childPath(pictureInPictureFolder, PICTURE_IN_PICTURE_RECIPE_FILENAME);
+      setStaging(PICTURE_IN_PICTURE_SELECTION); setMessage(`Saving ${target} and staging it to ${receiverIds.length} TV${receiverIds.length === 1 ? "" : "s"}...`);
       const response = await fetch("/api/receivers", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "picture-in-picture", receiverIds, baseSourcePath: baseSource.path, overlaySourcePath: overlaySource.path, layout: pictureInPictureLayout }),
+        body: JSON.stringify({ kind: "save-picture-in-picture", receiverIds, baseSourcePath: baseSource.path, overlaySourcePath: overlaySource.path, destinationFolder: pictureInPictureFolder, layout: pictureInPictureLayout }),
       });
-      const payload = await response.json() as { error?: string };
-      if (!response.ok) throw new Error(payload.error || "Could not stage picture-in-picture.");
+      const payload = await response.json() as { error?: string; recipe?: { path?: string; replacedPaths?: string[] } };
+      if (!response.ok) throw new Error(payload.error || "Could not save picture-in-picture.");
       setSelectedReceiverIds((current) => ({ ...current, [PICTURE_IN_PICTURE_SELECTION]: [] }));
-      setMessage(`Picture-in-picture staged for ${receiverIds.length} TV${receiverIds.length === 1 ? "" : "s"}. Each receiver checks again within about one minute.`);
+      await refreshSources();
+      const replacement = payload.recipe?.replacedPaths?.length ? ` Replaced ${payload.recipe.replacedPaths.length} older PiP recipe${payload.recipe.replacedPaths.length === 1 ? "" : "s"} in that folder.` : "";
+      setMessage(`${payload.recipe?.path || target} saved and staged for ${receiverIds.length} TV${receiverIds.length === 1 ? "" : "s"}.${replacement} Each receiver checks again within about one minute.`);
       void refreshReceivers();
-    } catch (error) { setUploadState("error"); setMessage(error instanceof Error ? error.message : "Could not stage picture-in-picture."); } finally { setStaging(null); }
+    } catch (error) { setUploadState("error"); setMessage(error instanceof Error ? error.message : "Could not save picture-in-picture."); } finally { setStaging(null); }
   }
 
   const crumbs = folder ? folder.split("/") : [];
   const selectedPictureInPictureReceivers = selectedReceiverIds[PICTURE_IN_PICTURE_SELECTION] || [];
   const dashboardTabs = <nav className="dashboard-tabs" aria-label="Dashboard views">
     <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}>Source library</button>
-    <button className={activeTab === "picture-in-picture" ? "active" : ""} type="button" onClick={() => setActiveTab("picture-in-picture")}>Picture in picture</button>
+    <button className={activeTab === "picture-in-picture" ? "active" : ""} type="button" onClick={() => { setPictureInPictureFolder(folder); setActiveTab("picture-in-picture"); }}>Picture in picture</button>
   </nav>;
 
   if (activeTab === "picture-in-picture") {
     return <section className="source-manager">
       {dashboardTabs}
       <section className="pip-card">
-        <div className="pip-heading"><div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Select a full-screen source and an overlay, then choose the TVs. Uploading an image here adds it directly to GitHub and selects it.</p></div><button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button></div>
+        <div className="pip-heading"><div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Select a full-screen source and an overlay, then save the reusable composition as <strong>Welcome_Filled</strong> in a source folder. Saving replaces any older PiP recipes in that folder and stages the saved source normally.</p></div><button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button></div>
         <div className="pip-workspace">
           <div className="pip-controls">
             <label>Base source<select value={baseSourcePath} onChange={(event) => setBaseSourcePath(event.target.value)}><option value="">Select full-screen source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === overlaySourcePath}>{source.path}</option>)}</select></label>
             <label>Picture in picture<select value={overlaySourcePath} onChange={(event) => setOverlaySourcePath(event.target.value)}><option value="">Select overlay source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === baseSourcePath}>{source.path}</option>)}</select></label>
+            <label>Save in folder<select value={pictureInPictureFolder} onChange={(event) => setPictureInPictureFolder(event.target.value)}><option value="">sources (root)</option>{folders.map((item) => <option key={item.path} value={item.path}>{item.path}</option>)}</select><small>Creates <code>{childPath(pictureInPictureFolder, PICTURE_IN_PICTURE_RECIPE_FILENAME)}</code>.</small></label>
             <label className="file-picker"><span>Add image as base</span><input type="file" accept=".jpg,.jpeg,.png,.gif,.bmp,.webp" disabled={uploadState === "uploading"} onChange={(event) => { void addSource(event.target.files?.[0] || null, "base"); event.currentTarget.value = ""; }} /></label>
             <label className="file-picker"><span>Add image as overlay</span><input type="file" accept=".jpg,.jpeg,.png,.gif,.bmp,.webp" disabled={uploadState === "uploading"} onChange={(event) => { void addSource(event.target.files?.[0] || null, "overlay"); event.currentTarget.value = ""; }} /></label>
             <div className="pip-position-readout"><span>Position</span><code>{Math.round(pictureInPictureLayout.x * 100)}% x {Math.round(pictureInPictureLayout.y * 100)}%</code><span>Size</span><code>{Math.round(pictureInPictureLayout.width * 100)}% x {Math.round(pictureInPictureLayout.height * 100)}%</code></div>
           </div>
           <div className="pip-preview" aria-label="Picture-in-picture preview"><div className="pip-preview-label">TV preview</div>{baseSource ? <MediaPreview className="pip-base" source={baseSource} alt={`Base: ${baseSource.name}`} /> : <div className="pip-empty">Choose a base source</div>}{overlaySource ? <div className="pip-overlay-frame" style={{ left: `${pictureInPictureLayout.x * 100}%`, top: `${pictureInPictureLayout.y * 100}%`, width: `${pictureInPictureLayout.width * 100}%`, height: `${pictureInPictureLayout.height * 100}%` }}><MediaPreview source={overlaySource} alt={`Overlay: ${overlaySource.name}`} /><span className="pip-overlay-label">Picture in picture</span></div> : null}</div>
         </div>
-        <div className="pip-send-row"><p>{baseSource && overlaySource ? <><strong>{baseSource.name}</strong> as base with <strong>{overlaySource.name}</strong> as picture in picture.</> : "Choose a base source and a second picture-in-picture source."}</p><details className="push-menu pip-send-menu"><summary className="button secondary">Send To{selectedPictureInPictureReceivers.length ? ` (${selectedPictureInPictureReceivers.length})` : ""}</summary><ReceiverPicker receivers={receivers} receiverError={receiverError} selected={selectedPictureInPictureReceivers} disabled={staging !== null} selectionKey={PICTURE_IN_PICTURE_SELECTION} onToggle={toggleReceiver} onRefresh={() => void refreshReceivers()} />{receivers.length && !receiverError ? <button className="button push-submit" type="button" disabled={!baseSource || !overlaySource || !selectedPictureInPictureReceivers.length || staging !== null} onClick={() => void stagePictureInPicture(selectedPictureInPictureReceivers)}>{staging === PICTURE_IN_PICTURE_SELECTION ? "Sending..." : `Send to ${selectedPictureInPictureReceivers.length} TV${selectedPictureInPictureReceivers.length === 1 ? "" : "s"}`}</button> : null}</details></div>
+        <div className="pip-send-row"><p>{baseSource && overlaySource ? <><strong>{baseSource.name}</strong> as base with <strong>{overlaySource.name}</strong> as picture in picture. The saved source will be <strong>Welcome_Filled</strong>.</> : "Choose a base source and a second picture-in-picture source."}</p><details className="push-menu pip-send-menu"><summary className="button secondary">Save &amp; Stage{selectedPictureInPictureReceivers.length ? ` (${selectedPictureInPictureReceivers.length})` : ""}</summary><ReceiverPicker receivers={receivers} receiverError={receiverError} selected={selectedPictureInPictureReceivers} disabled={staging !== null} selectionKey={PICTURE_IN_PICTURE_SELECTION} onToggle={toggleReceiver} onRefresh={() => void refreshReceivers()} />{receivers.length && !receiverError ? <button className="button push-submit" type="button" disabled={!baseSource || !overlaySource || !selectedPictureInPictureReceivers.length || staging !== null} onClick={() => void saveAndStagePictureInPicture(selectedPictureInPictureReceivers)}>{staging === PICTURE_IN_PICTURE_SELECTION ? "Saving..." : `Save and stage for ${selectedPictureInPictureReceivers.length} TV${selectedPictureInPictureReceivers.length === 1 ? "" : "s"}`}</button> : null}</details></div>
         {uploadState === "uploading" ? <progress value={progress} max="100" /> : null}{message ? <p className={uploadState === "error" ? "form-error" : "status-message"}>{message}</p> : null}
       </section>
     </section>;

@@ -5,7 +5,7 @@
 The repository implementation is complete for the Blob-free runtime path:
 
 - The dashboard uploads directly to GitHub through a short-lived source-repository GitHub App token; no upload passes through Blob or a Vercel Function body.
-- Receiver commands now use one GitHub `receiver-manifest.json` commit per Push To action, including multi-TV and picture-in-picture pushes.
+- Receiver commands now use one GitHub `receiver-manifest.json` commit per Push To action, including multi-TV pushes. Picture-in-picture is first saved as `Welcome_Filled.pip.json` in the selected source folder, then staged as an ordinary source command.
 - Blob code, the Blob publish workflow, and the `@vercel/blob` dependency have been removed. The legacy version is documented in [`docs/legacy-blob-rollback.md`](docs/legacy-blob-rollback.md).
 - The receiver has a configurable source repository and a 60-second command interval. Its package must still be deployed to each TV after the external repositories and Vercel variables are configured.
 

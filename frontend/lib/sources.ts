@@ -2,6 +2,8 @@ export const SOURCE_DIRECTORY = "sources";
 export const SOURCE_MAX_BYTES = 95 * 1024 * 1024;
 export const SOURCE_MAX_DEPTH = 4;
 export const SOURCE_FOLDER_MARKER = ".keep";
+export const PICTURE_IN_PICTURE_RECIPE_FILENAME = "Welcome_Filled.pip.json";
+export const PICTURE_IN_PICTURE_RECIPE_MIME_TYPE = "application/vnd.multihub.picture-in-picture+json";
 
 const SUPPORTED_EXTENSIONS = new Set([
   "mp4", "mov", "m4v", "webm", "mp3", "wav", "ogg",
@@ -9,6 +11,11 @@ const SUPPORTED_EXTENSIONS = new Set([
 ]);
 
 export class SourceValidationError extends Error {}
+
+/** A generated PiP recipe is a first-class source, not an uploaded document. */
+export function isPictureInPictureRecipePath(value: string): boolean {
+  return value.toLocaleLowerCase("en-US").endsWith(".pip.json");
+}
 
 function normalizedSegment(value: unknown, label: string): string {
   if (typeof value !== "string") {
@@ -29,6 +36,9 @@ function normalizedSegment(value: unknown, label: string): string {
 
 export function assertSourceFilename(value: unknown): string {
   const filename = normalizedSegment(value, "Source filename");
+  if (isPictureInPictureRecipePath(filename)) {
+    return filename;
+  }
   const extension = filename.split(".").pop()?.toLowerCase() ?? "";
   if (!SUPPORTED_EXTENSIONS.has(extension)) {
     throw new SourceValidationError(`Unsupported source type: .${extension || "(none)"}.`);
@@ -70,6 +80,13 @@ export function sourcePath(relativePath: string): string {
   return `${SOURCE_DIRECTORY}/${assertSourcePath(relativePath)}`;
 }
 
+/** The generated PiP recipe always has a predictable name in its chosen folder. */
+export function pictureInPictureRecipePath(relativeDirectory: string): string {
+  const folder = relativeDirectory.trim();
+  const directory = folder ? assertSourceDirectory(folder) : "";
+  return directory ? `${directory}/${PICTURE_IN_PICTURE_RECIPE_FILENAME}` : PICTURE_IN_PICTURE_RECIPE_FILENAME;
+}
+
 export function sourceFolderPath(relativeDirectory: string): string {
   return `${SOURCE_DIRECTORY}/${assertSourceDirectory(relativeDirectory)}`;
 }
@@ -91,7 +108,9 @@ export function assertSourceSize(size: unknown): number {
 }
 
 export function sourceMimeType(relativePath: string): string {
-  const extension = assertSourcePath(relativePath).split(".").pop()?.toLowerCase();
+  const path = assertSourcePath(relativePath);
+  if (isPictureInPictureRecipePath(path)) return PICTURE_IN_PICTURE_RECIPE_MIME_TYPE;
+  const extension = path.split(".").pop()?.toLowerCase();
   const types: Record<string, string> = {
     mp4: "video/mp4", mov: "video/quicktime", m4v: "video/x-m4v", webm: "video/webm",
     mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg",

@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { isAuthenticated } from "@/lib/auth";
-import { listReceiverStatuses, stagePictureInPictureForReceivers, stageSourceForReceivers } from "@/lib/receivers";
+import { savePictureInPictureRecipe } from "@/lib/github";
+import { listReceiverStatuses, stageSourceForReceivers } from "@/lib/receivers";
 import { SourceValidationError } from "@/lib/sources";
 
 export const dynamic = "force-dynamic";
@@ -22,18 +23,30 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   if (!(await isAuthenticated())) return unauthorized();
   try {
-    const input = await request.json() as { kind?: unknown; receiverId?: unknown; receiverIds?: unknown; sourcePath?: unknown; baseSourcePath?: unknown; overlaySourcePath?: unknown; layout?: unknown };
+    const input = await request.json() as {
+      kind?: unknown;
+      receiverId?: unknown;
+      receiverIds?: unknown;
+      sourcePath?: unknown;
+      baseSourcePath?: unknown;
+      overlaySourcePath?: unknown;
+      destinationFolder?: unknown;
+      layout?: unknown;
+    };
     const receiverIds = Array.isArray(input.receiverIds)
       ? input.receiverIds.map((receiverId) => String(receiverId || ""))
       : [String(input.receiverId || "")];
-    const commands = input.kind === "picture-in-picture"
-      ? await stagePictureInPictureForReceivers({
-        receiverIds,
+    if (input.kind === "save-picture-in-picture") {
+      const recipe = await savePictureInPictureRecipe({
+        destinationFolder: String(input.destinationFolder || ""),
         baseSourcePath: String(input.baseSourcePath || ""),
         overlaySourcePath: String(input.overlaySourcePath || ""),
         layout: input.layout,
-      })
-      : await stageSourceForReceivers({ receiverIds, sourcePath: String(input.sourcePath || "") });
+      });
+      const commands = await stageSourceForReceivers({ receiverIds, sourcePath: recipe.path });
+      return NextResponse.json({ commands, recipe }, { status: 201 });
+    }
+    const commands = await stageSourceForReceivers({ receiverIds, sourcePath: String(input.sourcePath || "") });
     return NextResponse.json({ commands }, { status: 201 });
   } catch (error) {
     const status = error instanceof SourceValidationError ? 400 : 502;

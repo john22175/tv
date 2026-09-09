@@ -4,7 +4,10 @@ import {
   assertSourceDirectory,
   assertSourcePath,
   isInternalSourcePath,
+  isPictureInPictureRecipePath,
+  pictureInPictureRecipePath,
   sourceMarkerPath,
+  sourceMimeType,
   sourcePath,
   SourceValidationError,
 } from "@/lib/sources";
@@ -31,6 +34,26 @@ type GitHubTreeNode = {
 type GitHubTree = { tree: GitHubTreeNode[]; truncated?: boolean; sha?: string };
 type GitHubCommit = { commit: { tree: { sha: string } } };
 type GitHubRef = { object: { sha: string } };
+
+type PictureInPictureLayout = { x: number; y: number; width: number; height: number };
+
+export type PictureInPictureRecipeInput = {
+  destinationFolder: string;
+  baseSourcePath: string;
+  overlaySourcePath: string;
+  layout: unknown;
+};
+
+export type PictureInPictureRecipeResult = {
+  path: string;
+  replacedPaths: string[];
+};
+
+class GitHubSourceError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+  }
+}
 
 function config() {
   const token = process.env.GITHUB_SOURCE_MANAGER_TOKEN?.trim();
@@ -76,7 +99,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(`GitHub request failed (${response.status}): ${detail || response.statusText}`);
+    throw new GitHubSourceError(response.status, `GitHub request failed (${response.status}): ${detail || response.statusText}`);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
@@ -250,4 +273,114 @@ export async function moveSource(input: { fromPath: string; toPath: string; sha:
     `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/git/refs/heads/${encodedPath(branch)}`,
     { method: "PATCH", body: JSON.stringify({ sha: newCommit.sha, force: false }) },
   );
+}
+
+function directParentPath(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index < 0 ? "" : path.slice(0, index);
+}
+
+function clampLayoutNumber(value: unknown, fallback: number, minimum: number, maximum: number): number {
+  const number = Number(value);
+  return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, number)) : fallback;
+}
+
+function normalizePictureInPictureLayout(value: unknown): PictureInPictureLayout {
+  const candidate = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  const width = clampLayoutNumber(candidate.width, 0.3, 0.12, 0.88);
+  const height = clampLayoutNumber(candidate.height, 0.3, 0.12, 0.88);
+  return {
+    x: clampLayoutNumber(candidate.x, 0.64, 0, 1 - width),
+    y: clampLayoutNumber(candidate.y, 0.06, 0, 1 - height),
+    width,
+    height,
+  };
+}
+
+/**
+ * Save the composition as a portable source recipe. All managed PiP recipes
+ * in the selected folder are replaced in a single Git commit, avoiding a
+ * transient state where an older recipe is still selectable.
+ */
+export async function savePictureInPictureRecipe(input: PictureInPictureRecipeInput): Promise<PictureInPictureRecipeResult> {
+  const destinationFolder = input.destinationFolder.trim()
+    ? assertSourceDirectory(input.destinationFolder)
+    : "";
+  const baseSourcePath = assertSourcePath(input.baseSourcePath);
+  const overlaySourcePath = assertSourcePath(input.overlaySourcePath);
+  if (baseSourcePath === overlaySourcePath) {
+    throw new SourceValidationError("Choose two different sources for picture-in-picture.");
+  }
+  if (!sourceMimeType(baseSourcePath).startsWith("image/") && !sourceMimeType(baseSourcePath).startsWith("video/")) {
+    throw new SourceValidationError("Picture-in-picture supports image and video base sources only.");
+  }
+  if (!sourceMimeType(overlaySourcePath).startsWith("image/") && !sourceMimeType(overlaySourcePath).startsWith("video/")) {
+    throw new SourceValidationError("Picture-in-picture supports image and video overlay sources only.");
+  }
+
+  const path = pictureInPictureRecipePath(destinationFolder);
+  const currentSources = await listSources();
+  const replacedPaths = currentSources
+    .filter((entry) => entry.kind === "file" && directParentPath(entry.path) === destinationFolder && isPictureInPictureRecipePath(entry.path))
+    .map((entry) => entry.path)
+    .filter((entryPath) => entryPath !== path);
+  const recipe = {
+    version: 1,
+    kind: "picture-in-picture",
+    baseSourcePath,
+    overlaySourcePath,
+    layout: normalizePictureInPictureLayout(input.layout),
+    updatedAt: new Date().toISOString(),
+  };
+  const { branch } = config();
+
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const ref = await request<GitHubRef>(
+      `/repos/${encodeURIComponent(config().owner)}/${encodeURIComponent(config().repository)}/git/ref/heads/${encodedPath(branch)}`,
+    );
+    const commit = await request<{ tree: { sha: string } }>(
+      `/repos/${encodeURIComponent(config().owner)}/${encodeURIComponent(config().repository)}/git/commits/${encodeURIComponent(ref.object.sha)}`,
+    );
+    const tree = await request<{ sha: string }>(
+      `/repos/${encodeURIComponent(config().owner)}/${encodeURIComponent(config().repository)}/git/trees`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          base_tree: commit.tree.sha,
+          tree: [
+            {
+              path: sourcePath(path),
+              mode: "100644",
+              type: "blob",
+              content: `${JSON.stringify(recipe, null, 2)}\n`,
+            },
+            ...replacedPaths.map((entryPath) => ({ path: sourcePath(entryPath), mode: "100644", type: "blob", sha: null })),
+          ],
+        }),
+      },
+    );
+    const newCommit = await request<{ sha: string }>(
+      `/repos/${encodeURIComponent(config().owner)}/${encodeURIComponent(config().repository)}/git/commits`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          message: `source-manager: save picture-in-picture ${path}`,
+          tree: tree.sha,
+          parents: [ref.object.sha],
+        }),
+      },
+    );
+    try {
+      await request<void>(
+        `/repos/${encodeURIComponent(config().owner)}/${encodeURIComponent(config().repository)}/git/refs/heads/${encodedPath(branch)}`,
+        { method: "PATCH", body: JSON.stringify({ sha: newCommit.sha, force: false }) },
+      );
+      return { path, replacedPaths };
+    } catch (error) {
+      lastError = error;
+      if (!(error instanceof GitHubSourceError) || ![409, 422].includes(error.status)) throw error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Could not save the picture-in-picture recipe.");
 }
