@@ -1200,7 +1200,7 @@ function pictureInPictureBackgroundRemoval(value) {
 
 function colorKeyedPictureInPictureImage(source, className, removal) {
   const canvas = document.createElement("canvas");
-  canvas.className = className;
+  canvas.className = `${className} picture-in-picture-background-removed`;
   canvas.setAttribute("role", "img");
   canvas.setAttribute("aria-label", String(source && source.sourceName || source && source.sourcePath || "Picture in picture"));
   const image = new Image();
@@ -1354,6 +1354,9 @@ function renderPictureInPictureStage(command) {
   stage.className = "picture-in-picture-stage";
   const overlayFrame = document.createElement("div");
   overlayFrame.className = "picture-in-picture-overlay-frame";
+  if (overlayElement.classList.contains("picture-in-picture-background-removed")) {
+    overlayFrame.classList.add("picture-in-picture-background-removed");
+  }
   overlayFrame.style.left = `${layout.x * 100}%`;
   overlayFrame.style.top = `${layout.y * 100}%`;
   overlayFrame.style.width = `${layout.width * 100}%`;

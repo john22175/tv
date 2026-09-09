@@ -161,6 +161,11 @@ canvas.picture-in-picture-overlay {
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.75);
 }
 
+.picture-in-picture-overlay-frame.picture-in-picture-background-removed,
+.picture-in-picture-overlay.picture-in-picture-background-removed {
+  background: transparent;
+}
+
 .picture-in-picture-overlay {
   object-fit: contain;
 }
