@@ -58,6 +58,21 @@ To replace such a legacy recipe, open the PiP tab, paste or choose an existing
 overlay, then use **Save & Stage**. The dashboard stores the replacement in
 `Welcome/Temp` and removes older managed `Welcome_Filled.pip.json` recipes.
 
+## PowerPoint slide shows
+
+The Tizen web runtime cannot play an Office file directly. When a `.ppt` or
+`.pptx` is uploaded, the `t-sources` **Render PowerPoint slides** GitHub Action
+uses LibreOffice to render one PNG per slide and writes a neighboring
+`<presentation>.slides.json` manifest. The generated PNGs live beneath hidden
+`sources/.presentations/`, so they do not fill the dashboard or TV source
+menus.
+
+The dashboard shows **Rendering slides** until the manifest appears. Then push
+the original PowerPoint file; the receiver resolves its manifest, displays the
+PNG slides for 10 seconds each, and repeats from slide one. This is an
+event-driven GitHub Action run per presentation upload—there is no Blob,
+Vercel conversion, or receiver polling added for it.
+
 ## Receiver network behavior
 
 The receiver no longer contacts the retired local desktop endpoint at

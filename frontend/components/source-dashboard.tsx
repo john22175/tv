@@ -10,6 +10,9 @@ import {
   PICTURE_IN_PICTURE_OVERLAY_FILENAME,
   pictureInPictureOverlayPath,
   pictureInPictureRecipePath,
+  isPresentationPath,
+  isSlideShowRecipePath,
+  slideShowRecipePathForPresentation,
   SOURCE_MAX_BYTES,
   SourceValidationError,
 } from "@/lib/sources";
@@ -57,6 +60,10 @@ function isPictureInPictureSource(source: SourceRecord): boolean {
 
 function isImageSource(source: Pick<SourceRecord, "name">): boolean {
   return ["jpg", "jpeg", "png", "gif", "bmp", "webp"].includes(source.name.split(".").at(-1)?.toLowerCase() || "");
+}
+
+function presentationStatus(source: SourceRecord, allFiles: SourceRecord[]): "processing" | "ready" {
+  return allFiles.some((item) => item.path === slideShowRecipePathForPresentation(source.path)) ? "ready" : "processing";
 }
 
 function colorChannels(color: string): [number, number, number] {
@@ -271,7 +278,10 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [pictureInPictureDrag, setPictureInPictureDrag] = useState<PictureInPictureDrag | null>(null);
   const pictureInPicturePreviewRef = useRef<HTMLDivElement>(null);
 
-  const files = useMemo(() => sources.filter((item) => item.kind === "file"), [sources]);
+  const allFiles = useMemo(() => sources.filter((item) => item.kind === "file"), [sources]);
+  // Slide manifests are internal helpers. Users select the original PowerPoint;
+  // the receiver follows its manifest once GitHub has rendered the slides.
+  const files = useMemo(() => allFiles.filter((item) => !isSlideShowRecipePath(item.path)), [allFiles]);
   const totalSize = useMemo(() => files.reduce((total, item) => total + item.size, 0), [files]);
   const refreshSources = useCallback(async () => {
     const updated = await apiSources();
@@ -330,7 +340,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
 
   const folders = useMemo(() => {
     const known = new Map<string, FolderItem>();
-    for (const source of sources) {
+    for (const source of [...sources].filter((item) => !isSlideShowRecipePath(item.path))) {
       if (source.kind === "folder") known.set(source.path, { path: source.path, name: source.name, sha: source.sha });
       const path = source.kind === "folder" ? source.path : parentPath(source.path);
       const parts = path ? path.split("/") : [];
@@ -360,7 +370,9 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
       await refreshSources();
       if (selectFor === "base") setBaseSourcePath(path);
       if (selectFor === "overlay") setOverlaySourcePath(path);
-      setUploadState("idle"); setProgress(100); setMessage(`${path} is published and ready to stage.`);
+      setUploadState("idle"); setProgress(100); setMessage(isPresentationPath(path)
+        ? `${path} is published. GitHub is rendering its slides now; refresh until it is marked Ready to loop.`
+        : `${path} is published and ready to stage.`);
     } catch (error) {
       setUploadState("error"); setMessage(error instanceof Error ? error.message : "The upload could not be started.");
     }
@@ -518,7 +530,9 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     <section className="table-card"><div className="table-heading"><div><h2>Published library</h2><nav className="breadcrumbs"><button type="button" onClick={() => setFolder("")}>sources</button>{crumbs.map((crumb, index) => { const path = crumbs.slice(0, index + 1).join("/"); return <span key={path}> / <button type="button" onClick={() => setFolder(path)}>{crumb}</button></span>; })}</nav></div><button className="button secondary" type="button" onClick={() => void refreshSources()}>Refresh</button></div><div className="folder-grid">{folder ? <button className="folder-card parent-folder" type="button" onClick={() => setFolder(parentPath(folder))}>Up one folder</button> : null}{visibleFolders.map((item) => <div key={item.path} className="folder-card"><button type="button" onClick={() => setFolder(item.path)}>Folder <span>{item.name}</span></button><button className="icon-button" type="button" disabled={!item.sha || deleting === item.path} onClick={() => void removeItem(item)} aria-label={`Delete ${item.path}`}>x</button></div>)}</div>
       {visibleFiles.length ? <div className="source-table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Revision</th><th>Preview</th><th>Push to</th><th /></tr></thead><tbody>{visibleFiles.map((source) => {
         const selected = selectedReceiverIds[source.path] || [];
-        return <tr key={source.sha}><td>{source.name}</td><td>{source.name.split(".").pop()?.toUpperCase()}</td><td>{formatBytes(source.size)}</td><td><code>{source.sha.slice(0, 10)}</code></td><td><a href={source.downloadUrl} target="_blank" rel="noreferrer">Open</a></td><td><details className="push-menu"><summary className="button secondary">Push To{selected.length ? ` (${selected.length})` : ""}</summary><ReceiverPicker receivers={receivers} receiverError={receiverError} selected={selected} disabled={staging !== null} selectionKey={source.path} onToggle={toggleReceiver} onRefresh={() => void refreshReceivers()} />{receivers.length && !receiverError ? <button className="button push-submit" type="button" disabled={!selected.length || staging !== null} onClick={() => void stageSource(selected, source)}>{staging === source.path ? "Pushing..." : `Push to ${selected.length} TV${selected.length === 1 ? "" : "s"}`}</button> : null}</details></td><td><button className="button secondary" type="button" onClick={() => { const destination = window.prompt("Move to folder (leave blank for sources root)", parentPath(source.path)); if (destination !== null) void moveToFolder(source, destination.trim()); }}>Move</button> <button className="button danger" type="button" disabled={deleting === source.path} onClick={() => void removeItem(source)}>{deleting === source.path ? "Removing..." : "Delete"}</button></td></tr>;
+        const presentation = isPresentationPath(source.path);
+        const ready = !presentation || presentationStatus(source, allFiles) === "ready";
+        return <tr key={source.sha}><td>{source.name}</td><td>{presentation ? `${source.name.split(".").pop()?.toUpperCase()} · ${ready ? "Ready to loop" : "Rendering slides…"}` : source.name.split(".").pop()?.toUpperCase()}</td><td>{formatBytes(source.size)}</td><td><code>{source.sha.slice(0, 10)}</code></td><td><a href={source.downloadUrl} target="_blank" rel="noreferrer">Open</a></td><td><details className="push-menu"><summary className="button secondary" aria-disabled={!ready}>{presentation && !ready ? "Rendering slides…" : `Push To${selected.length ? ` (${selected.length})` : ""}`}</summary>{ready ? <><ReceiverPicker receivers={receivers} receiverError={receiverError} selected={selected} disabled={staging !== null} selectionKey={source.path} onToggle={toggleReceiver} onRefresh={() => void refreshReceivers()} />{receivers.length && !receiverError ? <button className="button push-submit" type="button" disabled={!selected.length || staging !== null} onClick={() => void stageSource(selected, source)}>{staging === source.path ? "Pushing..." : `Push to ${selected.length} TV${selected.length === 1 ? "" : "s"}`}</button> : null}</> : <p className="push-options">GitHub is converting this presentation. Press Refresh shortly; it will loop on the TV once ready.</p>}</details></td><td><button className="button secondary" type="button" onClick={() => { const destination = window.prompt("Move to folder (leave blank for sources root)", parentPath(source.path)); if (destination !== null) void moveToFolder(source, destination.trim()); }}>Move</button> <button className="button danger" type="button" disabled={deleting === source.path} onClick={() => void removeItem(source)}>{deleting === source.path ? "Removing..." : "Delete"}</button></td></tr>;
       })}</tbody></table></div> : <p className="empty-state">No media files in this folder.</p>}
     </section>
   </section>;

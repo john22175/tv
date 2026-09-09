@@ -61,6 +61,7 @@ let githubRefreshLogs = [];
 let frontendStageRevision = "";
 let frontendStageActive = false;
 let receiverStagePollTimer = null;
+let slideShowTimer = null;
 let activePlaybackOffsetSeconds = 0;
 let activePlaybackOffsetApplied = false;
 let currentPlaybackToken = 0;
@@ -338,6 +339,9 @@ async function removeUnusedTizenOfflineFiles(entries) {
 
 async function offlineLibraryFilesPresent() {
   for (const entry of offlineLibrary.entries) {
+    if (entry.remote_only) {
+      continue;
+    }
     if (entry.offline_storage === "filesystem") {
       if (!await getStoredTizenOfflineFile(entry)) {
         return false;
@@ -355,6 +359,9 @@ async function offlineLibraryFilesPresent() {
 function uniqueLibraryBytes(entries) {
   const seen = new Set();
   return entries.reduce((total, entry) => {
+    if (entry.remote_only) {
+      return total;
+    }
     if (seen.has(entry.content_hash)) {
       return total;
     }
@@ -439,18 +446,39 @@ function mimeTypeForName(name) {
     bmp: "image/bmp",
     webp: "image/webp",
     pdf: "application/pdf",
+    ppt: "application/vnd.ms-powerpoint",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
   };
+  if (normalizedName.endsWith(".slides.json")) {
+    return "application/vnd.multihub.slide-show+json";
+  }
   return types[suffix] || "application/octet-stream";
 }
 
 function isPlayableMimeType(mimeType) {
   const value = String(mimeType || "").toLowerCase();
   return value === "application/vnd.multihub.picture-in-picture+json"
+    || value === "application/vnd.multihub.slide-show+json"
+    || value === "application/vnd.ms-powerpoint"
+    || value === "application/vnd.openxmlformats-officedocument.presentationml.presentation"
     || ["image/", "video/", "audio/"].some((prefix) => value.startsWith(prefix));
 }
 
 function isPictureInPictureRecipePath(path) {
   return String(path || "").toLowerCase().endsWith(".pip.json");
+}
+
+function isSlideShowRecipePath(path) {
+  return String(path || "").toLowerCase().endsWith(".slides.json");
+}
+
+function isPresentationPath(path) {
+  return /\.(ppt|pptx)$/i.test(String(path || ""));
+}
+
+function slideShowRecipePathForPresentation(path) {
+  const value = String(path || "").trim().replace(/^\/+|\/+$/g, "");
+  return isPresentationPath(value) ? value.replace(/\.(ppt|pptx)$/i, ".slides.json") : "";
 }
 
 function loadLocalSourceOverrideRevision() {
@@ -515,11 +543,13 @@ async function fetchGitHubLibraryManifest() {
 
   const entries = (Array.isArray(sourcePayload && sourcePayload.tree) ? sourcePayload.tree : [])
     .filter((node) => node && node.type === "blob" && globalThis.MultiHubSourceLibrary.isGitHubSourcePath(`sources/${String(node.path || "")}`))
+    .filter((node) => !isSlideShowRecipePath(String(node.path || "")))
     .map((node) => {
       const relativePath = String(node.path || "");
       const path = `sources/${relativePath}`;
       const size = Number(node.size);
       const mimeType = mimeTypeForName(relativePath);
+      const remoteOnly = isPresentationPath(relativePath) || isSlideShowRecipePath(relativePath);
       return {
         id: `github:${relativePath}`,
         name: relativePath,
@@ -529,6 +559,10 @@ async function fetchGitHubLibraryManifest() {
         // unchanged downloaded file across repository revisions.
         content_hash: String(node.sha || relativePath).replace(/[^a-zA-Z0-9_-]/g, "_"),
         playable: isPlayableMimeType(mimeType),
+        // The PowerPoint archive and its generated manifest stay online. The
+        // receiver streams the rendered PNG slides when selected instead of
+        // spending TV storage on the original Office document.
+        remote_only: remoteOnly,
         media_url: GITHUB_RAW_URL(commitSha, path),
       };
     })
@@ -573,6 +607,11 @@ async function applyOfflineLibraryManifest(manifest) {
   const storedByHash = new Map();
   const storedEntries = [];
   for (const entry of entries) {
+    if (entry.remote_only) {
+      storedByHash.set(entry.content_hash, entry);
+      storedEntries.push(entry);
+      continue;
+    }
     let storedEntry = storedByHash.get(entry.content_hash);
     if (!storedEntry && useTizenFileStorage) {
       const priorEntry = offlineLibrary.entries.find((candidate) => candidate.content_hash === entry.content_hash);
@@ -765,6 +804,20 @@ async function renderOfflineLibraryEntry(entry, { persistSelection = true, dashb
     } catch (error) {
       renderCard("Picture in Picture Error", String(error && error.message || error || "The saved recipe could not be loaded."));
       setStatus("Picture in Picture Error", "error");
+      return false;
+    }
+  }
+  if (isPresentationPath(entry.name)) {
+    try {
+      await renderSlideShowRecipe({
+        revision: `presentation:${String(entry.content_hash || entry.id || entry.name)}`,
+        sourcePath: slideShowRecipePathForPresentation(entry.name),
+        presentationSourcePath: entry.name,
+      });
+      return true;
+    } catch (error) {
+      renderCard("PowerPoint Not Ready", String(error && error.message || error || "The PowerPoint could not be rendered."));
+      setStatus("PowerPoint Not Ready", "error");
       return false;
     }
   }
@@ -1172,6 +1225,104 @@ function pictureInPictureSourceForPath(value) {
   };
 }
 
+function slideShowImageSourceForPath(value) {
+  const sourcePath = String(value || "").trim().replace(/^\/+|\/+$/g, "");
+  const parts = sourcePath.split("/");
+  // Rendered slides are created only by the repository workflow beneath this
+  // hidden folder. Do not let a manifest reference an arbitrary hidden file.
+  if (!sourcePath.startsWith(".presentations/") || parts.some((part, index) => !part || part === "." || part === ".." || (index > 0 && part.startsWith(".")))) {
+    return null;
+  }
+  const mimeType = mimeTypeForName(sourcePath);
+  if (!mimeType.startsWith("image/")) {
+    return null;
+  }
+  return {
+    sourcePath,
+    sourceName: sourcePath.split("/").pop() || sourcePath,
+    mediaUrl: GITHUB_RAW_URL(GITHUB_BRANCH, `sources/${sourcePath}`),
+    mimeType,
+  };
+}
+
+function slideShowIntervalMs(value) {
+  const seconds = Number(value);
+  return Math.round(Math.min(60, Math.max(3, Number.isFinite(seconds) ? seconds : 10)) * 1000);
+}
+
+async function renderSlideShowRecipe(command) {
+  const sourcePath = String(command && command.sourcePath || "");
+  if (!isSlideShowRecipePath(sourcePath)) {
+    throw new Error("The rendered slideshow is not ready yet. Refresh Sources after GitHub finishes converting the PowerPoint.");
+  }
+  const recipeUrl = GITHUB_RAW_URL(GITHUB_BRANCH, `sources/${sourcePath}`);
+  const response = await fetch(recipeUrl, { cache: "no-store" });
+  if (response.status === 404) {
+    throw new Error("GitHub is still rendering this PowerPoint. Refresh Sources after conversion completes.");
+  }
+  if (!response.ok) {
+    throw new Error(`PowerPoint slideshow returned HTTP ${response.status}.`);
+  }
+  const recipe = await response.json();
+  const slides = Array.isArray(recipe && recipe.slides)
+    ? recipe.slides.map(slideShowImageSourceForPath).filter(Boolean)
+    : [];
+  if (!recipe || recipe.kind !== "slide-show" || Number(recipe.version) !== 1 || !slides.length || slides.length > 300) {
+    throw new Error("The rendered PowerPoint slideshow is invalid or has no image slides.");
+  }
+
+  const intervalMs = slideShowIntervalMs(recipe.intervalSeconds);
+  const title = String(recipe.title || command && command.presentationSourcePath || sourcePath).trim();
+  localPlaybackOverride = null;
+  currentRenderKey = `slide-show:${String(command && command.revision || sourcePath)}`;
+  currentPlaybackToken = 0;
+  stopActivePlayback();
+  offlineActive = false;
+  currentReceiverState = {
+    receiver_alias: currentConfig ? currentConfig.alias : "",
+    source_name: title,
+    mime_type: "application/vnd.multihub.slide-show+json",
+    media_url: recipeUrl,
+    playback_state: "playing",
+    note: `${slides.length} slide${slides.length === 1 ? "" : "s"} · repeats every ${Math.round(intervalMs / 1000)} seconds.`,
+  };
+  headline.textContent = currentReceiverState.source_name;
+  note.textContent = currentReceiverState.note;
+  setImmersivePlayback(true);
+  viewport.innerHTML = "";
+  const stage = document.createElement("div");
+  stage.className = "slide-show-stage";
+  const image = document.createElement("img");
+  image.className = "slide-show-image";
+  image.alt = title;
+  let index = 0;
+  const showSlide = () => {
+    const slide = slides[index];
+    image.src = slide.mediaUrl;
+    image.alt = `${title} — slide ${index + 1} of ${slides.length}`;
+    headline.textContent = `${title} · Slide ${index + 1} of ${slides.length}`;
+    index = (index + 1) % slides.length;
+  };
+  image.onerror = () => {
+    note.textContent = "A rendered slide could not be loaded. Refresh Sources and try this PowerPoint again.";
+  };
+  stage.appendChild(image);
+  viewport.appendChild(stage);
+  showSlide();
+  if (slides.length > 1) {
+    slideShowTimer = setInterval(showSlide, intervalMs);
+  }
+  activePlayback = {
+    mode: "slide-show",
+    mediaUrl: recipeUrl,
+    element: image,
+  };
+  applyPlaybackState(currentReceiverState);
+  setStatus("PowerPoint Slide Show");
+  showRemoteFeedback(`${title}: ${slides.length} slide${slides.length === 1 ? "" : "s"}, looping.`);
+  claimRemoteFocus();
+}
+
 async function renderPictureInPictureRecipe(command) {
   const sourcePath = String(command && command.sourcePath || "");
   if (!isPictureInPictureRecipePath(sourcePath)) {
@@ -1437,6 +1588,10 @@ function stopAvPlay() {
 }
 
 function stopActivePlayback() {
+  if (slideShowTimer) {
+    clearInterval(slideShowTimer);
+    slideShowTimer = null;
+  }
   if (playbackProbeTimer) {
     clearTimeout(playbackProbeTimer);
     playbackProbeTimer = null;
@@ -1873,6 +2028,9 @@ function applyPlaybackState(state) {
       }
     } else if (activePlayback.mode === "avplay") {
       pauseAvPlay();
+    } else if (activePlayback.mode === "slide-show") {
+      setStatus("PowerPoint Slide Show");
+      return;
     }
     setStatus(activePlaybackOffsetSeconds > 0 ? "Ready" : "Paused");
     return;
@@ -1916,6 +2074,9 @@ function applyPlaybackState(state) {
       } catch (error) {}
     }
     resumeAvPlay();
+  } else if (activePlayback.mode === "slide-show") {
+    setStatus("PowerPoint Slide Show");
+    return;
   }
   setStatus("Connected");
 }

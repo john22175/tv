@@ -7,6 +7,7 @@ export const PICTURE_IN_PICTURE_DIRECTORY = "Welcome/Temp";
 export const PICTURE_IN_PICTURE_RECIPE_FILENAME = "Welcome_Filled.pip.json";
 export const PICTURE_IN_PICTURE_OVERLAY_FILENAME = "Welcome_Filled_overlay.png";
 export const PICTURE_IN_PICTURE_RECIPE_MIME_TYPE = "application/vnd.multihub.picture-in-picture+json";
+export const SLIDE_SHOW_RECIPE_MIME_TYPE = "application/vnd.multihub.slide-show+json";
 
 const SUPPORTED_EXTENSIONS = new Set([
   "mp4", "mov", "m4v", "webm", "mp3", "wav", "ogg",
@@ -18,6 +19,24 @@ export class SourceValidationError extends Error {}
 /** A generated PiP recipe is a first-class source, not an uploaded document. */
 export function isPictureInPictureRecipePath(value: string): boolean {
   return value.toLocaleLowerCase("en-US").endsWith(".pip.json");
+}
+
+/** A generated manifest that tells receivers to loop rendered PowerPoint slides. */
+export function isSlideShowRecipePath(value: string): boolean {
+  return value.toLocaleLowerCase("en-US").endsWith(".slides.json");
+}
+
+export function isPresentationPath(value: string): boolean {
+  return /\.(ppt|pptx)$/i.test(value);
+}
+
+/** GitHub Actions writes this beside the uploaded presentation. */
+export function slideShowRecipePathForPresentation(value: string): string {
+  const source = assertSourcePath(value);
+  if (!isPresentationPath(source)) {
+    throw new SourceValidationError("A PowerPoint .ppt or .pptx file is required.");
+  }
+  return source.replace(/\.(ppt|pptx)$/i, ".slides.json");
 }
 
 function normalizedSegment(value: unknown, label: string): string {
@@ -39,7 +58,7 @@ function normalizedSegment(value: unknown, label: string): string {
 
 export function assertSourceFilename(value: unknown): string {
   const filename = normalizedSegment(value, "Source filename");
-  if (isPictureInPictureRecipePath(filename)) {
+  if (isPictureInPictureRecipePath(filename) || isSlideShowRecipePath(filename)) {
     return filename;
   }
   const extension = filename.split(".").pop()?.toLowerCase() ?? "";
@@ -121,6 +140,7 @@ export function assertSourceSize(size: unknown): number {
 export function sourceMimeType(relativePath: string): string {
   const path = assertSourcePath(relativePath);
   if (isPictureInPictureRecipePath(path)) return PICTURE_IN_PICTURE_RECIPE_MIME_TYPE;
+  if (isSlideShowRecipePath(path)) return SLIDE_SHOW_RECIPE_MIME_TYPE;
   const extension = path.split(".").pop()?.toLowerCase();
   const types: Record<string, string> = {
     mp4: "video/mp4", mov: "video/quicktime", m4v: "video/x-m4v", webm: "video/webm",

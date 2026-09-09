@@ -137,6 +137,20 @@ body.media-active .viewport {
   background: black;
 }
 
+.slide-show-stage {
+  width: 100%;
+  height: 100%;
+  background: black;
+}
+
+.slide-show-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: black;
+}
+
 .picture-in-picture-base,
 .picture-in-picture-overlay {
   display: block;

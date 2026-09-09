@@ -7,10 +7,13 @@ import {
   assertSourceSize,
   isManagedPictureInPicturePath,
   isPictureInPictureRecipePath,
+  isPresentationPath,
+  isSlideShowRecipePath,
   pictureInPictureOverlayPath,
   pictureInPictureRecipePath,
   sourceMimeType,
   sourcePath,
+  slideShowRecipePathForPresentation,
   SOURCE_MAX_BYTES,
 } from "@/lib/sources";
 
@@ -46,5 +49,12 @@ describe("source validation", () => {
     expect(isManagedPictureInPicturePath("Welcome/Welcome_Filled.pip.json")).toBe(false);
     expect(isPictureInPictureRecipePath("Welcome/Temp/Welcome_Filled.pip.json")).toBe(true);
     expect(sourceMimeType("Welcome/Temp/Welcome_Filled.pip.json")).toBe("application/vnd.multihub.picture-in-picture+json");
+  });
+
+  it("maps a PowerPoint to its generated looping slideshow manifest", () => {
+    expect(isPresentationPath("Lobby/Announcements.pptx")).toBe(true);
+    expect(slideShowRecipePathForPresentation("Lobby/Announcements.pptx")).toBe("Lobby/Announcements.slides.json");
+    expect(isSlideShowRecipePath("Lobby/Announcements.slides.json")).toBe(true);
+    expect(sourceMimeType("Lobby/Announcements.slides.json")).toBe("application/vnd.multihub.slide-show+json");
   });
 });

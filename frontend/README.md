@@ -12,6 +12,7 @@ live in a private GitHub control repository.
 | Refresh Sources on a TV | TV -> public source repository | The TV checks immediately, independently of Push To. |
 | Push To | Dashboard -> private control manifest -> Vercel endpoint -> TV | One manifest commit even when several TVs are selected. |
 | Picture in picture | Dashboard -> `Welcome/Temp/Welcome_Filled.pip.json` in the public source repository -> ordinary Push To | Replaces the one reusable recipe and overlay, then stages it. |
+| PowerPoint slideshow | Dashboard -> `t-sources` GitHub Action -> rendered PNG slides -> TV | The uploaded `.ppt` or `.pptx` becomes a looping 10-second slideshow when rendering is ready. |
 | TV command check | TV -> Vercel every 60 seconds | No Blob read, status, or heartbeat write. |
 
 The dashboard works from any internet connection. TVs do not need to share
@@ -111,6 +112,11 @@ this check.
 - A newly pushed command arrives on the next command check—normally within
   about one minute. A new source appears when **Refresh Sources** is pressed;
   it does not wait for that command interval.
+- A PowerPoint upload starts one GitHub Actions conversion only for that file.
+  The dashboard shows **Rendering slides** until its generated slideshow is
+  committed; then push the original `.ppt`/`.pptx` to a TV. Slide images are
+  stored under the hidden `sources/.presentations/` folder and loop every 10
+  seconds. The workflow needs GitHub Actions' `contents: write` permission.
 - The dashboard intentionally does not show online/offline TV dots. It can
   show the last staged command, but a website cannot infer that a TV is alive
   without reintroducing a write-heavy presence protocol.
