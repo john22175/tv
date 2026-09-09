@@ -188,8 +188,75 @@ function clipboardImageAsReusableOverlay(file: File): Promise<File> {
   });
 }
 
-/** Generate one high-resolution PNG, then store it at the durable PiP overlay path. */
-async function qrLinkAsReusableOverlay(linkInput: string): Promise<File> {
+function qrPngWithOptionalHeader(qrImage: Blob, headerInput: string): Promise<File> {
+  const header = headerInput.trim();
+  if (!header) {
+    return Promise.resolve(new File([qrImage], PICTURE_IN_PICTURE_OVERLAY_FILENAME, { type: "image/png" }));
+  }
+  if (header.length > 80) {
+    return Promise.reject(new Error("QR headers may contain at most 80 characters."));
+  }
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(qrImage);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+      if (!context || !image.naturalWidth || !image.naturalHeight) {
+        reject(new Error("The QR image could not be prepared."));
+        return;
+      }
+      const fontSize = Math.max(34, Math.round(image.naturalWidth * 0.065));
+      const lineHeight = Math.round(fontSize * 1.24);
+      context.font = `700 ${fontSize}px Arial, sans-serif`;
+      const words = header.split(/\s+/);
+      const lines: string[] = [];
+      let line = "";
+      for (const word of words) {
+        const candidate = line ? `${line} ${word}` : word;
+        if (line && context.measureText(candidate).width > image.naturalWidth * 0.86) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = candidate;
+        }
+      }
+      if (line) lines.push(line);
+      if (lines.length > 2 || lines.some((value) => context.measureText(value).width > image.naturalWidth * 0.9)) {
+        reject(new Error("Shorten the QR header so it fits in two lines."));
+        return;
+      }
+      const padding = Math.round(image.naturalWidth * 0.045);
+      const headerHeight = padding * 2 + lineHeight * lines.length;
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight + headerHeight;
+      context.fillStyle = "#000000";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.fillStyle = "#ffffff";
+      context.font = `700 ${fontSize}px Arial, sans-serif`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      lines.forEach((value, index) => context.fillText(value, canvas.width / 2, padding + lineHeight * (index + 0.5)));
+      context.drawImage(image, 0, headerHeight);
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("The QR header could not be converted to PNG."));
+          return;
+        }
+        resolve(new File([blob], PICTURE_IN_PICTURE_OVERLAY_FILENAME, { type: "image/png" }));
+      }, "image/png");
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("The QR image could not be read."));
+    };
+    image.src = objectUrl;
+  });
+}
+
+/** Generate one high-resolution white-on-black QR PNG at the durable PiP path. */
+async function qrLinkAsReusableOverlay(linkInput: string, headerInput: string): Promise<File> {
   let link: URL;
   try {
     link = new URL(linkInput.trim());
@@ -205,6 +272,8 @@ async function qrLinkAsReusableOverlay(linkInput: string): Promise<File> {
   qrUrl.searchParams.set("format", "png");
   qrUrl.searchParams.set("ecc", "H");
   qrUrl.searchParams.set("margin", "24");
+  qrUrl.searchParams.set("color", "ffffff");
+  qrUrl.searchParams.set("bgcolor", "000000");
   const response = await fetch(qrUrl, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`QR image generation returned HTTP ${response.status}.`);
@@ -213,7 +282,7 @@ async function qrLinkAsReusableOverlay(linkInput: string): Promise<File> {
   if (!image.size || !image.type.startsWith("image/")) {
     throw new Error("QR image generation did not return a usable PNG.");
   }
-  return new File([image], PICTURE_IN_PICTURE_OVERLAY_FILENAME, { type: "image/png" });
+  return qrPngWithOptionalHeader(image, headerInput);
 }
 
 async function directGitHubUpload(file: File, path: string, onProgress: (percentage: number) => void, overwrite = false): Promise<void> {
@@ -304,6 +373,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [removeOverlayBackground, setRemoveOverlayBackground] = useState(false);
   const [overlayBackgroundColor, setOverlayBackgroundColor] = useState("#ffffff");
   const [qrLink, setQrLink] = useState("");
+  const [qrHeader, setQrHeader] = useState("");
   const [pictureInPictureDrag, setPictureInPictureDrag] = useState<PictureInPictureDrag | null>(null);
   const pictureInPicturePreviewRef = useRef<HTMLDivElement>(null);
 
@@ -412,7 +482,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
       setUploadState("uploading");
       setProgress(5);
       setMessage("Generating QR overlay...");
-      const qrFile = await qrLinkAsReusableOverlay(qrLink);
+      const qrFile = await qrLinkAsReusableOverlay(qrLink, qrHeader);
       // QR codes need their white quiet zone, so never carry forward an
       // image-specific background-removal setting from a prior overlay.
       setRemoveOverlayBackground(false);
@@ -555,7 +625,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
           <div className="pip-controls">
             <label>Base source<select value={baseSourcePath} onChange={(event) => setBaseSourcePath(event.target.value)}><option value="">Select full-screen source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === overlaySourcePath}>{source.path}</option>)}</select></label>
             <label>Picture in picture<select value={overlaySourcePath} onChange={(event) => setOverlaySourcePath(event.target.value)}><option value="">Select overlay source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === baseSourcePath}>{source.path}</option>)}</select></label>
-            <div className="pip-qr-control"><label>Link to QR<input type="url" inputMode="url" placeholder="https://example.com" value={qrLink} onChange={(event) => setQrLink(event.target.value)} /></label><button className="button secondary" type="button" disabled={!qrLink.trim() || uploadState === "uploading"} onClick={() => void createQrPictureInPictureOverlay()}>{uploadState === "uploading" ? "Creating QR..." : "Link to QR"}</button><small>Creates and selects a QR PNG at <code>{pictureInPictureOverlayPath()}</code>, replacing the prior pasted or QR overlay.</small></div>
+            <div className="pip-qr-control"><label>Link to QR<input type="url" inputMode="url" placeholder="https://example.com" value={qrLink} onChange={(event) => setQrLink(event.target.value)} /></label><label>Optional QR header (white text)<input type="text" maxLength={80} placeholder="Scan for more information" value={qrHeader} onChange={(event) => setQrHeader(event.target.value)} /></label><button className="button secondary" type="button" disabled={!qrLink.trim() || uploadState === "uploading"} onClick={() => void createQrPictureInPictureOverlay()}>{uploadState === "uploading" ? "Creating QR..." : "Link to QR"}</button><small>Creates a borderless white-on-black QR PNG at <code>{pictureInPictureOverlayPath()}</code>, replacing the prior pasted or QR overlay.</small></div>
             <p className="pip-fixed-path">Reusable PiP files are stored in <code>sources/{PICTURE_IN_PICTURE_DIRECTORY}/</code>: <code>{pictureInPictureOverlayPath()}</code> and <code>{pictureInPictureRecipePath()}</code>.</p>
             <label className="pip-checkbox"><input type="checkbox" checked={removeOverlayBackground} disabled={!overlaySource || !isImageSource(overlaySource)} onChange={(event) => setRemoveOverlayBackground(event.target.checked)} /> Remove Background</label>
             {removeOverlayBackground ? <label>Background color<input type="color" value={overlayBackgroundColor} onChange={(event) => setOverlayBackgroundColor(event.target.value)} /><small>Matching overlay-image pixels become transparent.</small></label> : null}

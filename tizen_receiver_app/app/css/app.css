@@ -172,7 +172,6 @@ canvas.picture-in-picture-overlay {
   position: absolute;
   overflow: hidden;
   background: black;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.75);
 }
 
 .picture-in-picture-overlay-frame.picture-in-picture-background-removed,
