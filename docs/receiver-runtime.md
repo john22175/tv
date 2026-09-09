@@ -27,6 +27,26 @@ TV has the current receiver package, wait up to one minute for the index cache,
 then press **Refresh Sources** on that TV. Do not use the retired `tv/sources/`
 tree as a repair source.
 
+## Receiver source-menu controls and rollback
+
+On a deployed receiver, press the number matching its immutable package ID to
+open its local Saved Sources menu: **1** for `tv-1`, through **6** for `tv-6`.
+Remote keys cannot open a menu on a different physical TV; the matching-number
+rule prevents one receiver from responding to another receiver's shortcut.
+
+The menu is a vertical file-explorer list: folders appear before files,
+**Up/Down** move through the list, **Enter** opens a folder or plays a source,
+and **Left** goes to the parent folder (or closes the menu at the root).
+**Right** moves focus to the vertical action column on the list's right;
+there **Up/Down** select **Refresh Sources** or **View Logs**, **Enter** runs
+the selected action, and **Left** returns to the source list.
+
+Before this navigation revision, **Up** opened the menu, source cards were a
+left-to-right wrapping carousel, and Refresh/Logs were above the cards. To
+roll back only this interaction/layout, revert the commit named **“Use
+number-key file explorer source menu”**; it does not alter the source cache,
+GitHub/Vercel configuration, media, or staged commands.
+
 ## Reusable picture in picture
 
 There is exactly one managed PiP composition. It is stored in the public media

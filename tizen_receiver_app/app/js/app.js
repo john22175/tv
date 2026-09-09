@@ -1000,6 +1000,11 @@ function sourceMenuParent() {
   return index < 0 ? "" : sourceMenuFolder.slice(0, index);
 }
 
+function sourceMenuNumberKey() {
+  const target = receiverTargetId();
+  return target ? target.slice(-1) : "";
+}
+
 function renderSourceMenu() {
   const entries = sourceMenuEntries();
   const actionFocused = sourceMenuFocus === "actions";
@@ -1015,9 +1020,11 @@ function renderSourceMenu() {
     sourceMenuIndex = Math.max(0, entries.length - 1);
   }
   const visible = Math.min(5, entries.length);
-  const start = entries.length <= visible ? 0 : sourceMenuIndex - Math.floor(visible / 2);
-  for (let offset = 0; offset < visible; offset += 1) {
-    const index = (start + offset + entries.length) % entries.length;
+  // Render a conventional vertical list: folders are emitted first by
+  // sourceMenuEntries(), then files. It never wraps from the last row back
+  // to the first as the former horizontal carousel did.
+  const start = Math.max(0, Math.min(sourceMenuIndex - Math.floor(visible / 2), entries.length - visible));
+  for (let index = start; index < start + visible; index += 1) {
     const entry = entries[index];
     const item = document.createElement("div");
     item.className = `source-menu-item${!actionFocused && index === sourceMenuIndex ? " selected" : ""}${entry.kind === "folder" || entry.playable ? "" : " unsupported"}`;
@@ -1062,7 +1069,7 @@ function moveSourceMenu(delta) {
   if (!entries.length) {
     return;
   }
-  sourceMenuIndex = (sourceMenuIndex + delta + entries.length) % entries.length;
+  sourceMenuIndex = Math.max(0, Math.min(entries.length - 1, sourceMenuIndex + delta));
   renderSourceMenu();
 }
 
@@ -2222,9 +2229,22 @@ function handleRemoteKey(state, event) {
   const isRight = code === 39 || keyName === "ArrowRight";
   const isUp = code === 38 || keyName === "ArrowUp";
   const isDown = code === 40 || keyName === "ArrowDown";
+  const numberKey = /^[1-6]$/.test(keyName)
+    ? keyName
+    : (code >= 49 && code <= 54 ? String(code - 48) : "");
+
+  // A physical remote can only control the TV receiving its IR/Bluetooth
+  // command. The number is therefore a local guard: key N opens the menu on
+  // the package whose immutable receiver ID is tv-N, never on another TV.
+  if (numberKey && numberKey === sourceMenuNumberKey() && !sourceMenuOpen && !refreshLogMenuOpen) {
+    event.preventDefault();
+    event.stopPropagation();
+    openSourceMenu();
+    return;
+  }
 
   if (refreshLogMenuOpen) {
-    if (isDown || isUp || isEnter) {
+    if (isDown || isLeft || isEnter) {
       event.preventDefault();
       event.stopPropagation();
       closeRefreshLogMenu();
@@ -2234,14 +2254,14 @@ function handleRemoteKey(state, event) {
 
   if (sourceMenuOpen) {
     if (sourceMenuFocus === "actions") {
-      if (isLeft || isRight) {
+      if (isUp || isDown) {
         event.preventDefault();
         event.stopPropagation();
-        sourceMenuActionIndex = isLeft ? 0 : 1;
+        sourceMenuActionIndex = isUp ? 0 : 1;
         renderSourceMenu();
         return;
       }
-      if (isDown) {
+      if (isLeft) {
         event.preventDefault();
         event.stopPropagation();
         if (sourceMenuEntries().length) {
@@ -2262,35 +2282,31 @@ function handleRemoteKey(state, event) {
         }
         return;
       }
-      if (isUp) {
+      if (isRight) {
         event.preventDefault();
         event.stopPropagation();
       }
       return;
     }
 
-    if (isDown) {
-      event.preventDefault();
-      event.stopPropagation();
-      if (sourceMenuFolder) {
-        sourceMenuFolder = sourceMenuParent();
-        sourceMenuIndex = 0;
-        renderSourceMenu();
-      } else {
-        closeSourceMenu();
-      }
-      return;
-    }
-    if (isLeft) {
+    if (isUp) {
       event.preventDefault();
       event.stopPropagation();
       moveSourceMenu(-1);
       return;
     }
-    if (isRight) {
+    if (isDown) {
       event.preventDefault();
       event.stopPropagation();
       moveSourceMenu(1);
+      return;
+    }
+    if (isRight) {
+      event.preventDefault();
+      event.stopPropagation();
+      sourceMenuFocus = "actions";
+      sourceMenuActionIndex = 0;
+      renderSourceMenu();
       return;
     }
     if (isEnter) {
@@ -2302,27 +2318,21 @@ function handleRemoteKey(state, event) {
       });
       return;
     }
-    if (isUp) {
+    if (isLeft) {
       event.preventDefault();
       event.stopPropagation();
       if (sourceMenuFolder) {
         sourceMenuFolder = sourceMenuParent();
         sourceMenuIndex = 0;
       } else {
-        sourceMenuFocus = "actions";
-        sourceMenuActionIndex = 0;
+        closeSourceMenu();
+        return;
       }
       renderSourceMenu();
       return;
     }
   }
 
-  if (isUp) {
-    event.preventDefault();
-    event.stopPropagation();
-    openSourceMenu();
-    return;
-  }
   if (isEnter) {
     event.preventDefault();
     event.stopPropagation();
@@ -2481,7 +2491,8 @@ async function refreshGitHubSourcesOnLoad() {
   offlineActive = false;
   stopActivePlayback();
   if (offlineLibrary.entries.length) {
-    renderCard("GitHub Sources Ready", `${offlineLibrary.entries.length} source(s) are saved on this TV. Press Up to choose one.`);
+    const menuKey = sourceMenuNumberKey();
+    renderCard("GitHub Sources Ready", `${offlineLibrary.entries.length} source(s) are saved on this TV.${menuKey ? ` Press ${menuKey} to choose one.` : ""}`);
     setStatus("GitHub Sources Loaded");
   } else {
     renderCard("GitHub Source Library Empty", "No source files are currently published in the GitHub repository.");

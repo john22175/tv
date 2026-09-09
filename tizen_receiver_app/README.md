@@ -6,6 +6,12 @@ The editable Samsung TV receiver project lives in [`app/`](app/). Its app ID is 
 
 At startup, and when **Refresh Sources** is selected on the TV, the receiver reads the public `main` branch of `john22175/t-sources`. It downloads only regular files beneath `sources/`, preserving source folders. The local `tv/sources/` tree is retired and is never a production receiver source.
 
+Open Saved Sources with the number matching that package's receiver ID (`1`
+for `tv-1` through `6` for `tv-6`). Sources appear in a vertical folders-first
+list. Use Up/Down to select, Right to reach Refresh Sources and View Logs, and
+Left to return or navigate up a folder. The detailed behavior and rollback
+notes are in [`../docs/receiver-runtime.md`](../docs/receiver-runtime.md).
+
 Sources must remain below 95 MiB. Git LFS is not supported because the receiver downloads GitHub raw URLs directly. Use the [`frontend/`](../frontend/) dashboard to publish and remove sources; changes are available after the next TV source refresh without reinstalling this app.
 
 ## Receiver-code releases

@@ -30,18 +30,20 @@
         <span>Saved Sources</span>
         <span id="sourceMenuPosition" class="source-menu-position"></span>
       </div>
-      <div class="source-menu-actions" aria-label="Source actions, shown with saved sources">
-        <div id="refreshSourcesAction" class="source-menu-action" aria-label="Refresh sources">
-          <span>Refresh Sources</span>
-          <span class="source-menu-action-detail">GitHub</span>
-        </div>
-        <div id="viewRefreshLogsAction" class="source-menu-action" aria-label="View refresh logs">
-          <span>View Logs</span>
-          <span class="source-menu-action-detail">Refresh history</span>
+      <div class="source-menu-body">
+        <div id="sourceMenuItems" class="source-menu-items" aria-label="Saved source list"></div>
+        <div class="source-menu-actions" aria-label="Source actions">
+          <div id="refreshSourcesAction" class="source-menu-action" aria-label="Refresh sources">
+            <span>Refresh Sources</span>
+            <span class="source-menu-action-detail">Source index</span>
+          </div>
+          <div id="viewRefreshLogsAction" class="source-menu-action" aria-label="View refresh logs">
+            <span>View Logs</span>
+            <span class="source-menu-action-detail">Refresh history</span>
+          </div>
         </div>
       </div>
-      <div id="sourceMenuItems" class="source-menu-items"></div>
-      <div class="source-menu-help">Red cards: refresh and logs &nbsp; Up: focus cards &nbsp; Left/Right: choose &nbsp; Enter: open</div>
+      <div class="source-menu-help">Up/Down: move &nbsp; Right: source actions &nbsp; Left: back &nbsp; Enter: open</div>
     </aside>
     <aside id="refreshLogMenu" class="refresh-log-menu hidden" aria-label="GitHub refresh logs" aria-hidden="true">
       <div class="source-menu-heading">
@@ -49,7 +51,7 @@
         <span id="refreshLogPosition" class="source-menu-position"></span>
       </div>
       <div id="refreshLogItems" class="refresh-log-items"></div>
-      <div class="source-menu-help">Down: return to source actions</div>
+      <div class="source-menu-help">Enter, Left, or Down: return to source actions</div>
     </aside>
   </div>
 
