@@ -43,8 +43,11 @@ sources/Welcome/Temp/Welcome_Filled_overlay.png
 - Saving validates that both referenced source files are still present in
   `t-sources` before committing. This prevents a new broken recipe.
 
-The recipe is listed as a normal source in `Welcome/Temp`; select or Push To it
-on any receiver to reuse the composition.
+The TV lists the recipe as **Picture in Picture · Welcome_Filled** in
+`Welcome/Temp`; select it or Push To it on any receiver to reuse the
+composition. The companion `Welcome_Filled_overlay.png` remains a normal image
+source, while the recipe is fetched directly so custom JSON caching cannot hide
+it from the TV menu.
 
 ## PiP error diagnosis
 

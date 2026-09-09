@@ -549,7 +549,12 @@ async function fetchGitHubLibraryManifest() {
       const path = `sources/${relativePath}`;
       const size = Number(node.size);
       const mimeType = mimeTypeForName(relativePath);
-      const remoteOnly = isPresentationPath(relativePath) || isSlideShowRecipePath(relativePath);
+      // Recipes are small public control documents. Render them directly from
+      // GitHub instead of relying on the TV download service to preserve a
+      // custom JSON MIME type in its offline cache.
+      const remoteOnly = isPictureInPictureRecipePath(relativePath)
+        || isPresentationPath(relativePath)
+        || isSlideShowRecipePath(relativePath);
       return {
         id: `github:${relativePath}`,
         name: relativePath,
@@ -956,10 +961,14 @@ function renderSourceMenu() {
     item.className = `source-menu-item${!actionFocused && index === sourceMenuIndex ? " selected" : ""}${entry.kind === "folder" || entry.playable ? "" : " unsupported"}`;
     const name = document.createElement("div");
     name.className = "source-menu-item-name";
-    name.textContent = entry.kind === "folder" ? `📁 ${entry.name}` : entry.display_name;
+    name.textContent = entry.kind === "folder"
+      ? `📁 ${entry.name}`
+      : (isPictureInPictureRecipePath(entry.name) ? `Picture in Picture · ${entry.display_name.replace(/\.pip\.json$/i, "")}` : entry.display_name);
     const kind = document.createElement("div");
     kind.className = "source-menu-item-kind";
-    kind.textContent = entry.kind === "folder" ? "Folder" : (entry.playable ? String(entry.mime_type || "Saved source") : "Not playable on TV");
+    kind.textContent = entry.kind === "folder"
+      ? "Folder"
+      : (isPictureInPictureRecipePath(entry.name) ? "Reusable configured composition" : (entry.playable ? String(entry.mime_type || "Saved source") : "Not playable on TV"));
     item.append(name, kind);
     sourceMenuItems.appendChild(item);
   }
