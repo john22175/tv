@@ -1,68 +1,58 @@
-import { handleUpload, type HandleUploadBody } from "@vercel/blob/client";
 import { NextRequest, NextResponse } from "next/server";
 
 import { isAuthenticated } from "@/lib/auth";
-import { dispatchSourcePublish, sourceExists } from "@/lib/github";
-import { assertSourcePath, SOURCE_MAX_BYTES, SourceValidationError } from "@/lib/sources";
+import { createGitHubInstallationToken } from "@/lib/github-app";
+import { sourceExists } from "@/lib/github";
+import { assertSourcePath, assertSourceSize, sourcePath, SourceValidationError } from "@/lib/sources";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type UploadPayload = { path: string; requestId: string };
+type UploadRequest = { path?: unknown; size?: unknown };
 
-function parsePayload(value: string | null | undefined): UploadPayload {
-  try {
-    const parsed = JSON.parse(value || "{}") as Partial<UploadPayload>;
-    const path = assertSourcePath(parsed.path);
-    if (!/^[a-zA-Z0-9_-]{8,64}$/.test(String(parsed.requestId || ""))) {
-      throw new SourceValidationError("Upload request identifier is invalid.");
-    }
-    return { path, requestId: String(parsed.requestId) };
-  } catch (error) {
-    if (error instanceof SourceValidationError) {
-      throw error;
-    }
-    throw new SourceValidationError("Upload details are invalid.");
+function sourceRepository() {
+  const owner = process.env.SOURCE_GITHUB_OWNER?.trim() || process.env.GITHUB_OWNER?.trim();
+  const repository = process.env.SOURCE_GITHUB_REPOSITORY?.trim() || process.env.GITHUB_REPOSITORY?.trim();
+  const branch = process.env.SOURCE_GITHUB_BRANCH?.trim() || process.env.GITHUB_BRANCH?.trim() || "main";
+  if (!owner || !repository) {
+    throw new Error("SOURCE_GITHUB_OWNER and SOURCE_GITHUB_REPOSITORY must be configured.");
   }
+  return { owner, repository, branch };
 }
 
+function encodedPath(path: string): string {
+  return path.split("/").map(encodeURIComponent).join("/");
+}
+
+/**
+ * Returns a short-lived GitHub App installation token for one direct browser
+ * upload. The token is never stored in the browser and the app must be
+ * installed only on the separate media-only source repository.
+ */
 export async function POST(request: NextRequest): Promise<NextResponse> {
-  const body = await request.json() as HandleUploadBody;
-  if (body.type === "blob.generate-client-token" && !(await isAuthenticated())) {
+  if (!(await isAuthenticated())) {
     return NextResponse.json({ error: "Authentication required." }, { status: 401 });
   }
-
   try {
-    const response = await handleUpload({
-      body,
-      request,
-      onBeforeGenerateToken: async (pathname, clientPayload) => {
-        const payload = parsePayload(clientPayload);
-        if (pathname !== `pending/${payload.requestId}/${payload.path}`) {
-          throw new SourceValidationError("Upload path does not match the approved source.");
-        }
-        if (await sourceExists(payload.path)) {
-          throw new SourceValidationError("A source with that filename already exists.");
-        }
-        return {
-          allowedContentTypes: ["application/octet-stream", "audio/*", "image/*", "video/*", "application/pdf", "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation"],
-          maximumSizeInBytes: SOURCE_MAX_BYTES,
-          addRandomSuffix: true,
-          tokenPayload: JSON.stringify(payload),
-        };
-      },
-      onUploadCompleted: async ({ blob, tokenPayload }) => {
-        const payload = parsePayload(String(tokenPayload || ""));
-        await dispatchSourcePublish({
-          path: payload.path,
-          requestId: payload.requestId,
-          uploadUrl: blob.url,
-        });
-      },
+    const input = await request.json() as UploadRequest;
+    const path = assertSourcePath(input.path);
+    assertSourceSize(input.size);
+    if (await sourceExists(path)) {
+      throw new SourceValidationError("A source with that filename already exists.");
+    }
+    const { owner, repository, branch } = sourceRepository();
+    const { token, expires_at: expiresAt } = await createGitHubInstallationToken("GITHUB_SOURCE_UPLOAD");
+    return NextResponse.json({
+      contentUrl: `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/contents/${encodedPath(sourcePath(path))}`,
+      branch,
+      path,
+      token,
+      expiresAt,
+    }, {
+      headers: { "Cache-Control": "no-store" },
     });
-    return NextResponse.json(response);
   } catch (error) {
     const status = error instanceof SourceValidationError ? 400 : 502;
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not start the upload." }, { status });
+    return NextResponse.json({ error: error instanceof Error ? error.message : "Could not authorize the upload." }, { status });
   }
 }

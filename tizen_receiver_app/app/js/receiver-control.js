@@ -6,6 +6,6 @@
   // the dashboard password on the server.
   global.MultiHubReceiverControl = {
     baseUrl: "https://tv-sepia-seven.vercel.app",
-    pollIntervalMs: 30000,
+    pollIntervalMs: 60000,
   };
 }(globalThis));

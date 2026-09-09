@@ -1,5 +1,10 @@
 {
   "certificateProfile": "YOUR_TIZEN_CERTIFICATE_PROFILE",
+  "sourceRepository": {
+    "owner": "your-github-owner",
+    "repository": "tv-sources",
+    "branch": "main"
+  },
   "targets": [
     {
       "name": "Living Room TV",

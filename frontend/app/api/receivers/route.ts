@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { isAuthenticated } from "@/lib/auth";
-import { listReceiverStatuses, stagePictureInPictureForReceiver, stageSourceForReceiver } from "@/lib/receivers";
+import { listReceiverStatuses, stagePictureInPictureForReceivers, stageSourceForReceivers } from "@/lib/receivers";
 import { SourceValidationError } from "@/lib/sources";
 
 export const dynamic = "force-dynamic";
@@ -22,16 +22,19 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   if (!(await isAuthenticated())) return unauthorized();
   try {
-    const input = await request.json() as { kind?: unknown; receiverId?: unknown; sourcePath?: unknown; baseSourcePath?: unknown; overlaySourcePath?: unknown; layout?: unknown };
-    const command = input.kind === "picture-in-picture"
-      ? await stagePictureInPictureForReceiver({
-        receiverId: String(input.receiverId || ""),
+    const input = await request.json() as { kind?: unknown; receiverId?: unknown; receiverIds?: unknown; sourcePath?: unknown; baseSourcePath?: unknown; overlaySourcePath?: unknown; layout?: unknown };
+    const receiverIds = Array.isArray(input.receiverIds)
+      ? input.receiverIds.map((receiverId) => String(receiverId || ""))
+      : [String(input.receiverId || "")];
+    const commands = input.kind === "picture-in-picture"
+      ? await stagePictureInPictureForReceivers({
+        receiverIds,
         baseSourcePath: String(input.baseSourcePath || ""),
         overlaySourcePath: String(input.overlaySourcePath || ""),
         layout: input.layout,
       })
-      : await stageSourceForReceiver({ receiverId: String(input.receiverId || ""), sourcePath: String(input.sourcePath || "") });
-    return NextResponse.json({ command }, { status: 201 });
+      : await stageSourceForReceivers({ receiverIds, sourcePath: String(input.sourcePath || "") });
+    return NextResponse.json({ commands }, { status: 201 });
   } catch (error) {
     const status = error instanceof SourceValidationError ? 400 : 502;
     return NextResponse.json({ error: error instanceof Error ? error.message : "Could not stage the source." }, { status });

@@ -31,7 +31,6 @@ type GitHubTreeNode = {
 type GitHubTree = { tree: GitHubTreeNode[]; truncated?: boolean; sha?: string };
 type GitHubCommit = { commit: { tree: { sha: string } } };
 type GitHubRef = { object: { sha: string } };
-type GitHubContent = { sha: string };
 
 function config() {
   const token = process.env.GITHUB_SOURCE_MANAGER_TOKEN?.trim();
@@ -40,9 +39,11 @@ function config() {
   }
   return {
     token,
-    owner: process.env.GITHUB_OWNER?.trim() || "john22175",
-    repository: process.env.GITHUB_REPOSITORY?.trim() || "tv",
-    branch: process.env.GITHUB_BRANCH?.trim() || "main",
+    // The fallback names keep the legacy repository usable until the source
+    // repository is created. New deployments must set SOURCE_GITHUB_*.
+    owner: process.env.SOURCE_GITHUB_OWNER?.trim() || process.env.GITHUB_OWNER?.trim() || "john22175",
+    repository: process.env.SOURCE_GITHUB_REPOSITORY?.trim() || process.env.GITHUB_REPOSITORY?.trim() || "tv",
+    branch: process.env.SOURCE_GITHUB_BRANCH?.trim() || process.env.GITHUB_BRANCH?.trim() || "main",
   };
 }
 
@@ -155,18 +156,6 @@ export async function sourceExists(relativePath: string): Promise<boolean> {
   if (response.status === 404) return false;
   if (!response.ok) throw new Error(`GitHub lookup failed (${response.status}).`);
   return true;
-}
-
-export async function dispatchSourcePublish(input: { path: string; uploadUrl: string; requestId: string }): Promise<void> {
-  const path = assertSourcePath(input.path);
-  const { owner, repository, branch } = config();
-  await request<void>(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/actions/workflows/publish-source.yml/dispatches`,
-    {
-      method: "POST",
-      body: JSON.stringify({ ref: branch, inputs: { source_path: path, upload_url: input.uploadUrl, request_id: input.requestId } }),
-    },
-  );
 }
 
 export async function deleteSource(input: { path: string; sha: string }): Promise<void> {

@@ -1,100 +1,137 @@
 # TV Sources Dashboard
 
-This Next.js app manages the repository's public [`sources/`](../sources/) directory. The TV receiver reads those files directly from GitHub without credentials, so the dashboard password protects **editing access only**. It does not make source files private.
+This password-protected Next.js dashboard is hosted on Vercel, but it does not
+use Vercel Blob. Media lives in a public GitHub source repository; TV commands
+live in a private GitHub control repository.
 
-## Before you start
+## How it works
 
-- Commit and push this repository, including `.github/workflows/publish-source.yml`, before importing it into Vercel.
-- The dashboard's GitHub workflow always commits to `main`; keep `main` as the production branch.
-- Use Node.js 20.9 or newer locally. This project was verified with Node 22.
+| Task | Where it happens | Result |
+| --- | --- | --- |
+| Add media | Authenticated browser -> GitHub Contents API | One media commit; the source is immediately published. |
+| Refresh Sources on a TV | TV -> public source repository | The TV checks immediately, independently of Push To. |
+| Push To | Dashboard -> private control manifest -> Vercel endpoint -> TV | One manifest commit even when several TVs are selected. |
+| TV command check | TV -> Vercel every 60 seconds | No Blob read, status, or heartbeat write. |
 
-## 1. Create the GitHub access token
+The dashboard works from any internet connection. TVs do not need to share
+Wi-Fi with the dashboard; each TV does need internet access and a running
+receiver app.
 
-1. In GitHub, open **Settings → Developer settings → Personal access tokens → Fine-grained tokens** and create a token.
-2. Set its resource owner to the account that owns `john22175/tv`, then restrict repository access to **Only select repositories** → `tv`.
-3. Under **Repository permissions**, set **Contents** to **Read and write** and **Actions** to **Read and write**. Leave every other permission at its minimum/default value.
-4. Generate and copy the token now. It will be used only as Vercel's `GITHUB_SOURCE_MANAGER_TOKEN`; never put it in a file, browser variable, or `NEXT_PUBLIC_*` variable.
+## Prerequisites
 
-The dashboard reads/deletes source files through GitHub's Contents API and triggers the publish workflow with the Actions API.
+Create these repositories before configuring Vercel:
 
-## 2. Import the repository into Vercel
+| Repository | Visibility | Contents |
+| --- | --- | --- |
+| `tv` | Existing setting | This dashboard and Tizen receiver source. |
+| `tv-sources` | Public | `sources/` media tree only. |
+| `tv-control` | Private | `receiver-manifest.json` only. |
 
-1. In Vercel, select **Add New → Project** and import the `john22175/tv` GitHub repository.
-2. In **Configure Project**, set **Root Directory** to `frontend`.
-3. Confirm the framework is **Next.js**. Leave the default install command and build command (`npm run build`) unchanged.
-4. Set **Production Branch** to `main`.
-5. Do not deploy yet; add the environment variables below first.
+Seed `tv-sources` with a `sources/` directory (copy the current media tree).
+Seed `tv-control` with a first commit and this file at its root:
 
-## 3. Create and connect Vercel Blob
+```json
+{
+  "version": 1,
+  "updatedAt": "2026-01-01T00:00:00.000Z",
+  "receivers": {
+    "tv-1": null,
+    "tv-2": null,
+    "tv-3": null,
+    "tv-4": null,
+    "tv-5": null,
+    "tv-6": null
+  }
+}
+```
 
-1. Open the new Vercel project, then go to **Storage → Create Database → Blob**.
-2. Choose **Public** access. The temporary upload must be downloadable by the GitHub Actions runner; the final source file will also be public on GitHub.
-3. Create the store and connect it to **Production**, **Preview**, and **Development**.
-4. Vercel adds `BLOB_READ_WRITE_TOKEN` automatically. Do not expose it to the browser.
+Create two GitHub Apps:
 
-The dashboard uses authenticated browser-to-Blob uploads so media never passes through a Vercel Function. This is required for files larger than Vercel Functions' 4.5 MB request limit. [Vercel's client-upload guide](https://vercel.com/docs/vercel-blob/client-upload) documents this flow.
+| App | Install only on | Permission | Token use |
+| --- | --- | --- | --- |
+| TV Source Upload | `tv-sources` | Contents: Read and write | A short-lived installation token is returned only to an authenticated dashboard browser for a direct upload. |
+| TV Control | `tv-control` | Contents: Read and write | Server-side only, to read and write `receiver-manifest.json`. |
 
-## 4. Add Vercel environment variables
+An installation token cannot be restricted to `sources/` within a repository.
+That is why `tv-sources` must contain media only: never install the source
+upload App on the dashboard/code repository.
 
-In **Project → Settings → Environment Variables**, add every variable below to **Production**, **Preview**, and **Development**. None may use the `NEXT_PUBLIC_` prefix.
+## Vercel environment variables
 
-| Variable | Value |
+Copy [`.env.example`](.env.example) as the reference. Add every variable to
+the required Vercel environments, without a `NEXT_PUBLIC_` prefix.
+
+| Variables | Purpose |
 | --- | --- |
-| `SOURCE_DASHBOARD_PASSWORD` | A long, unique password used to sign in to the dashboard. |
-| `SESSION_SECRET` | A random 32-byte-or-longer secret used to sign session cookies. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"`. |
-| `GITHUB_SOURCE_MANAGER_TOKEN` | The fine-grained GitHub token from step 1. |
-| `GITHUB_OWNER` | `john22175` |
-| `GITHUB_REPOSITORY` | `tv` |
-| `GITHUB_BRANCH` | `main` |
-| `BLOB_READ_WRITE_TOKEN` | Created automatically when the Blob store was connected. Verify it is present. |
+| `SOURCE_DASHBOARD_PASSWORD`, `SESSION_SECRET` | Dashboard sign-in/session. |
+| `SOURCE_GITHUB_OWNER`, `SOURCE_GITHUB_REPOSITORY`, `SOURCE_GITHUB_BRANCH` | The public source repository. |
+| `GITHUB_SOURCE_MANAGER_TOKEN` | Server-only fine-grained token for source listing, folder management, moving, and deleting. Restrict it to `tv-sources`, Contents read/write. |
+| `GITHUB_SOURCE_UPLOAD_APP_ID`, `GITHUB_SOURCE_UPLOAD_INSTALLATION_ID`, `GITHUB_SOURCE_UPLOAD_PRIVATE_KEY` | GitHub App credentials for direct browser uploads to `tv-sources`. |
+| `CONTROL_GITHUB_OWNER`, `CONTROL_GITHUB_REPOSITORY`, `CONTROL_GITHUB_BRANCH` | The private control repository. |
+| `GITHUB_CONTROL_APP_ID`, `GITHUB_CONTROL_INSTALLATION_ID`, `GITHUB_CONTROL_PRIVATE_KEY` | Server-only GitHub App credentials for the command manifest. |
 
-Save the variables, then deploy the project. Future pushes to `main` deploy the dashboard automatically.
+For multiline private keys, paste the PEM as one Vercel value with literal
+`\n` separators, as illustrated in `.env.example`. Do not expose an App key,
+an installation token, or the manager token in browser variables, logs, or a
+receiver package.
 
-## 5. Enable the GitHub publish workflow
+The dashboard is configured to fall back to the old `GITHUB_OWNER`,
+`GITHUB_REPOSITORY`, and `GITHUB_BRANCH` names only for local migration work.
+Production must use the explicit `SOURCE_GITHUB_*` values and the separate
+media-only repository.
 
-1. In the GitHub repository, open **Settings → Actions → General**.
-2. Under **Workflow permissions**, select **Read and write permissions** and save. This lets `publish-source.yml` commit the validated file to `sources/`.
-3. Open **Settings → Secrets and variables → Actions → New repository secret**.
-4. Create a secret named `BLOB_READ_WRITE_TOKEN` and paste the exact same token stored in Vercel.
+## Deploy and receiver migration
 
-The workflow deletes the temporary Blob after it either publishes or fails. Never add the token as a repository variable or commit it to `.env.example`.
+1. Import the existing `tv` repository into Vercel with `frontend` as its root
+   directory. Set the environment variables above and deploy to Preview first.
+2. In Preview, add a small image, create a folder, move/delete a test source,
+   push it to one test receiver, and confirm a single `tv-control` commit.
+3. Copy `tizen_receiver_app/deploy.targets.example.json` to
+   `deploy.targets.json`. Set `sourceRepository` to `tv-sources`, then enter
+   every TV's host, serial, receiver ID, and certificate profile.
+4. Run `./scripts/deploy-receiver.ps1 -WhatIf`, then deploy one TV at a time.
+   The receiver update points source refreshes at `tv-sources` and changes its
+   command poll interval to 60 seconds.
+5. After each installation, press **Refresh Sources** on the TV and verify a
+   newly uploaded source; then use the dashboard's **Push To** for that TV.
 
-## 6. Verify the live workflow
+Until a receiver is redeployed, it continues to read the repository baked into
+its previous package. Keep the old source library available until all TVs pass
+this check.
 
-1. Open the Vercel production URL and sign in with `SOURCE_DASHBOARD_PASSWORD`.
-2. Upload a small supported file such as a PNG. The dashboard should show upload progress, then **Waiting for GitHub to publish it**.
-3. In GitHub, open the **Actions** tab and confirm **Publish TV source** completes successfully.
-4. Confirm the file appears in [`sources/`](../sources/) on the `main` branch and in the dashboard's Published library table.
-5. On a TV, open the receiver and select **Refresh Sources**. The new file should appear without reinstalling the receiver app.
-6. Delete the test source in the dashboard and confirm a deletion commit appears on `main`.
+## Operational limits
 
-## TV staging board
+- One direct upload is handled at a time in the dashboard. The raw file limit
+  is 95 MiB; browser Base64 encoding uses substantially more memory, so test
+  large uploads on the actual dashboard computer before relying on them.
+- Keep ordinary GitHub media repositories comfortably below 1 GB and avoid
+  Git LFS: the receiver downloads regular public GitHub raw URLs.
+- A Push To action produces one private-manifest commit for all selected TVs.
+  Do not add a per-TV write loop or background heartbeat.
+- A newly pushed command arrives on the next command check—normally within
+  about one minute. A new source appears when **Refresh Sources** is pressed;
+  it does not wait for that command interval.
+- The dashboard intentionally does not show online/offline TV dots. It can
+  show the last staged command, but a website cannot infer that a TV is alive
+  without reintroducing a write-heavy presence protocol.
 
-The dashboard also provides the six-TV **TV stage** board. Its controls are entirely on the website:
-
-1. Create folders or drag a published source row onto a folder to organize `sources/`.
-2. Open a folder by selecting its folder card; folders also appear in the receiver's **Saved Sources** menu.
-3. Use a source row's **Push To** menu to select one or more TVs, then push that single source to all selected receivers. The menu shows every TV's green/red dot, last connection time, 30-second listener interval, and expected next check; each app selects the source during its next listener check.
-4. A green dot means that receiver has checked the website within the last ten minutes. A red dot means its receiver app is closed, offline, or has not yet been deployed with its TV identity.
-
-Receiver identities are installed by `tizen_receiver_app/scripts/deploy-receiver.ps1`; no dashboard password, GitHub credential, or manual remote pairing is stored on a TV. The receiver must be running for the website to see it and to deliver a staged source.
-
-## Local development (optional)
+## Local verification
 
 ```powershell
 cd frontend
 npm ci
-npm run dev
+npm test
+npm run build
 ```
 
-For real uploads from a local server, install the Vercel CLI, run `vercel link`, then use `vercel env pull .env.local`. Vercel Blob's completion callback must be reachable from the internet, so use a tunnel such as ngrok for local upload testing or verify uploads in the deployed Preview/Production environment instead.
+For local direct-upload testing, set the GitHub and session variables in a
+local `.env.local` that is never committed. The browser uploads directly to
+GitHub, so no Vercel Blob callback or tunnel is required.
 
-## Troubleshooting
+## Rollback reference
 
-| Symptom | Check |
-| --- | --- |
-| Login always fails | Verify `SOURCE_DASHBOARD_PASSWORD` is set in the deployment's environment, then redeploy. |
-| Upload is rejected before starting | Check the source filename/path, supported extension, unique destination path, and 95 MiB per-file limit. |
-| Upload waits more than five minutes | Open the failed **Publish TV source** workflow run. Common causes are a missing GitHub token permission or missing GitHub `BLOB_READ_WRITE_TOKEN` secret. |
-| Workflow cannot push | Confirm `main` is not blocking GitHub Actions through branch protection, or allow the `github-actions[bot]` token to push. |
-| TV does not show a published source | Confirm the file is under root `sources/`, then use **Refresh Sources** or restart the receiver. |
+The retired Blob design, its known quota behavior, required settings, and a
+controlled rollback checklist are in
+[`docs/legacy-blob-rollback.md`](../docs/legacy-blob-rollback.md). Do not
+re-enable it casually: it exhausted the observed Hobby plan through normal
+background polling.

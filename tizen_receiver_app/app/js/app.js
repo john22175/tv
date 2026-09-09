@@ -4,9 +4,10 @@ const STORAGE_KEYS = {
 };
 const DEFAULT_BASE_PORT = 65331;
 const DEFAULT_BASE_URL = "http://10.171.64.201:65331";
-const GITHUB_OWNER = "john22175";
-const GITHUB_REPOSITORY = "tv";
-const GITHUB_BRANCH = "main";
+const SOURCE_REPOSITORY = globalThis.MultiHubSourceRepository || {};
+const GITHUB_OWNER = String(SOURCE_REPOSITORY.owner || "john22175");
+const GITHUB_REPOSITORY = String(SOURCE_REPOSITORY.repository || "tv");
+const GITHUB_BRANCH = String(SOURCE_REPOSITORY.branch || "main");
 const GITHUB_COMMIT_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/commits/${GITHUB_BRANCH}`;
 const GITHUB_ROOT_TREE_URL = (treeSha) => `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/git/trees/${encodeURIComponent(treeSha)}`;
 const GITHUB_SOURCES_TREE_URL = (treeSha) => `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/git/trees/${encodeURIComponent(treeSha)}?recursive=1`;

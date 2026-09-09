@@ -67,6 +67,17 @@ if (!$targetsConfig.targets -or $targetsConfig.targets.Count -eq 0) {
     throw "At least one deployment target is required."
 }
 
+$sourceRepository = $null
+if ($targetsConfig.sourceRepository) {
+    $sourceOwner = [string]$targetsConfig.sourceRepository.owner
+    $sourceName = [string]$targetsConfig.sourceRepository.repository
+    $sourceBranch = [string]$targetsConfig.sourceRepository.branch
+    if ($sourceOwner -notmatch "^[A-Za-z0-9-]+$" -or $sourceName -notmatch "^[A-Za-z0-9_.-]+$" -or $sourceBranch -notmatch "^[A-Za-z0-9._/-]+$") {
+        throw "sourceRepository requires a GitHub owner, repository, and branch made of safe GitHub name characters."
+    }
+    $sourceRepository = @{ owner = $sourceOwner; repository = $sourceName; branch = $sourceBranch }
+}
+
 $sdb = Find-TizenTool "sdb"
 $tizen = Find-TizenTool "tizen"
 
@@ -128,6 +139,21 @@ function New-ReceiverPackage([string]$ReceiverId) {
 }(globalThis));
 "@
     [System.IO.File]::WriteAllText($targetScript, $targetContents, (New-Object System.Text.UTF8Encoding($false)))
+
+    if ($sourceRepository) {
+        $sourceRepositoryScript = Join-Path $targetBuildDirectory "js\source-repository.js"
+        $sourceRepositoryContents = @"
+(function attachSourceRepository(global) {
+  "use strict";
+  global.MultiHubSourceRepository = {
+    owner: "$($sourceRepository.owner)",
+    repository: "$($sourceRepository.repository)",
+    branch: "$($sourceRepository.branch)"
+  };
+}(globalThis));
+"@
+        [System.IO.File]::WriteAllText($sourceRepositoryScript, $sourceRepositoryContents, (New-Object System.Text.UTF8Encoding($false)))
+    }
 
     $packageStartedAt = (Get-Date).AddSeconds(-2)
     Invoke-TizenCommand $tizen @("package", "-t", "wgt", "-s", [string]$targetsConfig.certificateProfile, "-o", $packageDirectory, "--", $targetBuildDirectory)
