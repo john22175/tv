@@ -58,9 +58,10 @@ sources/Welcome/Temp/Welcome_Filled.pip.json
 sources/Welcome/Temp/Welcome_Filled_overlay.png
 ```
 
-- **Ctrl+V** in the dashboard PiP tab converts the clipboard image to PNG and
-  replaces `Welcome_Filled_overlay.png`; it never creates timestamped root
-  files.
+- **Picked / pasted source** is the default PiP input mode. It selects an
+  existing source or uses **Ctrl+V** to convert a clipboard image to PNG and
+  replace `Welcome_Filled_overlay.png`; it never creates timestamped root
+  files. Clipboard pastes are ignored while the separate QR mode is selected.
 - **Link to QR** accepts an `http://` or `https://` URL and creates a
   high-resolution white-on-black QR PNG at the same
   `Welcome_Filled_overlay.png` path. An optional header is rendered as white
@@ -68,6 +69,10 @@ sources/Welcome/Temp/Welcome_Filled_overlay.png
   as the overlay, and does not add a border or shadow. The entered URL is sent
   once to the QR rendering service to produce the PNG; afterward the TV reads
   only the PNG committed to `t-sources`.
+- Every published source URL includes its Git blob revision as a cache key.
+  This is especially important for `Welcome_Filled_overlay.png`: after it is
+  overwritten by a paste or QR, the dashboard and TV fetch the new pixels,
+  rather than a CDN-cached prior QR/image.
 - **Save & Stage** replaces `Welcome_Filled.pip.json` in the same location and
   stages that recipe as an ordinary source command.
 - The recipe records the selected base path, overlay path, layout, and optional

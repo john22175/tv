@@ -21,6 +21,7 @@ type UploadState = "idle" | "uploading" | "error";
 type Receiver = { id: string; label: string; host: string; commandRevision: string | null; stagedAt: string | null; pollIntervalMs: number };
 type FolderItem = { path: string; name: string; sha: string | null };
 type DashboardTab = "library" | "picture-in-picture";
+type PictureInPictureOverlayMode = "source" | "qr";
 type PictureInPictureLayout = { x: number; y: number; width: number; height: number };
 type PictureInPictureDrag = { pointerId: number; mode: "move" | "resize"; originX: number; originY: number; layout: PictureInPictureLayout };
 type BackgroundRemoval = { color: string; tolerance: number };
@@ -372,6 +373,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [pictureInPictureLayout, setPictureInPictureLayout] = useState<PictureInPictureLayout>(DEFAULT_PICTURE_IN_PICTURE_LAYOUT);
   const [removeOverlayBackground, setRemoveOverlayBackground] = useState(false);
   const [overlayBackgroundColor, setOverlayBackgroundColor] = useState("#ffffff");
+  const [pictureInPictureOverlayMode, setPictureInPictureOverlayMode] = useState<PictureInPictureOverlayMode>("source");
   const [qrLink, setQrLink] = useState("");
   const [qrHeader, setQrHeader] = useState("");
   const [pictureInPictureDrag, setPictureInPictureDrag] = useState<PictureInPictureDrag | null>(null);
@@ -494,7 +496,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   }
 
   useEffect(() => {
-    if (activeTab !== "picture-in-picture") return;
+    if (activeTab !== "picture-in-picture" || pictureInPictureOverlayMode !== "source") return;
     function pasteClipboardImage(event: ClipboardEvent) {
       const focused = document.activeElement;
       if (focused instanceof HTMLInputElement || focused instanceof HTMLTextAreaElement || focused instanceof HTMLSelectElement) return;
@@ -516,7 +518,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     }
     window.addEventListener("paste", pasteClipboardImage);
     return () => window.removeEventListener("paste", pasteClipboardImage);
-  }, [activeTab, files, folder, refreshSources]);
+  }, [activeTab, files, folder, pictureInPictureOverlayMode, refreshSources]);
 
   async function createFolder() {
     const name = window.prompt("Folder name", "");
@@ -624,8 +626,8 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
         <div className="pip-workspace">
           <div className="pip-controls">
             <label>Base source<select value={baseSourcePath} onChange={(event) => setBaseSourcePath(event.target.value)}><option value="">Select full-screen source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === overlaySourcePath}>{source.path}</option>)}</select></label>
-            <label>Picture in picture<select value={overlaySourcePath} onChange={(event) => setOverlaySourcePath(event.target.value)}><option value="">Select overlay source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === baseSourcePath}>{source.path}</option>)}</select></label>
-            <div className="pip-qr-control"><label>Link to QR<input type="url" inputMode="url" placeholder="https://example.com" value={qrLink} onChange={(event) => setQrLink(event.target.value)} /></label><label>Optional QR header (white text)<input type="text" maxLength={80} placeholder="Scan for more information" value={qrHeader} onChange={(event) => setQrHeader(event.target.value)} /></label><button className="button secondary" type="button" disabled={!qrLink.trim() || uploadState === "uploading"} onClick={() => void createQrPictureInPictureOverlay()}>{uploadState === "uploading" ? "Creating QR..." : "Link to QR"}</button><small>Creates a borderless white-on-black QR PNG at <code>{pictureInPictureOverlayPath()}</code>, replacing the prior pasted or QR overlay.</small></div>
+            <fieldset className="pip-overlay-mode"><legend>Picture in picture input</legend><button className={pictureInPictureOverlayMode === "source" ? "active" : ""} type="button" aria-pressed={pictureInPictureOverlayMode === "source"} onClick={() => setPictureInPictureOverlayMode("source")}>Picked / pasted source</button><button className={pictureInPictureOverlayMode === "qr" ? "active" : ""} type="button" aria-pressed={pictureInPictureOverlayMode === "qr"} onClick={() => setPictureInPictureOverlayMode("qr")}>QR code</button></fieldset>
+            {pictureInPictureOverlayMode === "source" ? <><label>Picture in picture<select value={overlaySourcePath} onChange={(event) => setOverlaySourcePath(event.target.value)}><option value="">Select overlay source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === baseSourcePath}>{source.path}</option>)}</select></label><small>Press <kbd>Ctrl</kbd> + <kbd>V</kbd> anywhere outside a field in this tab to replace the reusable overlay with a pasted image.</small></> : <div className="pip-qr-control"><label>Link to QR<input type="url" inputMode="url" placeholder="https://example.com" value={qrLink} onChange={(event) => setQrLink(event.target.value)} /></label><label>Optional QR header (white text)<input type="text" maxLength={80} placeholder="Scan for more information" value={qrHeader} onChange={(event) => setQrHeader(event.target.value)} /></label><button className="button secondary" type="button" disabled={!qrLink.trim() || uploadState === "uploading"} onClick={() => void createQrPictureInPictureOverlay()}>{uploadState === "uploading" ? "Creating QR..." : "Link to QR"}</button><small>Creates a borderless white-on-black QR PNG at <code>{pictureInPictureOverlayPath()}</code>, replacing the prior pasted or QR overlay.</small></div>}
             <p className="pip-fixed-path">Reusable PiP files are stored in <code>sources/{PICTURE_IN_PICTURE_DIRECTORY}/</code>: <code>{pictureInPictureOverlayPath()}</code> and <code>{pictureInPictureRecipePath()}</code>.</p>
             <label className="pip-checkbox"><input type="checkbox" checked={removeOverlayBackground} disabled={!overlaySource || !isImageSource(overlaySource)} onChange={(event) => setRemoveOverlayBackground(event.target.checked)} /> Remove Background</label>
             {removeOverlayBackground ? <label>Background color<input type="color" value={overlayBackgroundColor} onChange={(event) => setOverlayBackgroundColor(event.target.value)} /><small>Matching overlay-image pixels become transparent.</small></label> : null}

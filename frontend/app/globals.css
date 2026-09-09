@@ -115,6 +115,10 @@ td:first-child { font-weight: 700; max-width: 400px; overflow-wrap: anywhere; }
 .pip-controls .pip-checkbox { display: flex; align-items: center; gap: 10px; color: #fff; }
 .pip-controls .pip-checkbox input { width: 17px; height: 17px; accent-color: var(--accent); }
 .pip-controls small { color: var(--muted); font-weight: 400; line-height: 1.35; }
+.pip-overlay-mode { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 10px; border: 1px solid #666; }
+.pip-overlay-mode legend { padding: 0 5px; color: var(--pale-blue); font-size: .82rem; font-weight: 800; }
+.pip-overlay-mode button { min-height: 40px; border: 1px solid #777; background: #121212; color: #d9d9d9; font-weight: 800; }
+.pip-overlay-mode button.active { border-color: var(--accent); background: var(--accent); color: #111; }
 .pip-position-readout { display: grid; grid-template-columns: 1fr auto; gap: 9px 18px; padding: 16px; border-left: 4px solid var(--accent); background: var(--pale-blue); color: #101010; }
 .pip-position-readout span { font-size: .8rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
 .pip-position-readout code { font-weight: 800; }

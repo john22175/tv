@@ -84,9 +84,12 @@ function sourceWebUrl(path: string): string {
   return `https://github.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/blob/${encodeURIComponent(branch)}/${encodedPath(sourcePath(path))}`;
 }
 
-function sourceRawUrl(path: string): string {
+function sourceRawUrl(path: string, revision = ""): string {
   const { owner, repository, branch } = config();
-  return `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/${encodeURIComponent(branch)}/${encodedPath(sourcePath(path))}`;
+  const url = `https://raw.githubusercontent.com/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/${encodeURIComponent(branch)}/${encodedPath(sourcePath(path))}`;
+  // A file can be replaced at the same durable PiP path. Tie the CDN cache
+  // key to the Git blob revision so previews cannot show its former QR/image.
+  return revision ? `${url}?v=${encodeURIComponent(revision)}` : url;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -158,7 +161,7 @@ export async function listSources(): Promise<SourceRecord[]> {
         path,
         sha: node.sha,
         size: Number(node.size || 0),
-        downloadUrl: sourceRawUrl(path),
+        downloadUrl: sourceRawUrl(path, node.sha),
         htmlUrl: sourceWebUrl(path),
       });
     } catch { /* Only supported public source files appear in the dashboard. */ }

@@ -555,6 +555,7 @@ async function fetchGitHubLibraryManifest() {
       const remoteOnly = isPictureInPictureRecipePath(relativePath)
         || isPresentationPath(relativePath)
         || isSlideShowRecipePath(relativePath);
+      const contentHash = String(node && node.sha || relativePath).replace(/[^a-zA-Z0-9_-]/g, "_");
       return {
         id: `github:${relativePath}`,
         name: relativePath,
@@ -702,12 +703,14 @@ async function fetchReceiverLibraryManifest() {
         name: relativePath,
         mime_type: mimeType,
         size: Number.isFinite(size) && size >= 0 ? size : 0,
-        content_hash: String(node && node.sha || relativePath).replace(/[^a-zA-Z0-9_-]/g, "_"),
+        content_hash: contentHash,
         playable: isPlayableMimeType(mimeType),
         remote_only: remoteOnly,
         // Public raw content remains the media delivery path. The cached
         // Vercel endpoint supplies only directory metadata, never media bytes.
-        media_url: GITHUB_RAW_URL(GITHUB_BRANCH, sourcePath),
+        // A fixed PiP overlay filename is deliberately overwritten. Its blob
+        // hash makes the raw-CDN URL distinct from an older QR/image version.
+        media_url: `${GITHUB_RAW_URL(GITHUB_BRANCH, sourcePath)}?v=${encodeURIComponent(contentHash)}`,
       };
     })
     .filter(Boolean)
