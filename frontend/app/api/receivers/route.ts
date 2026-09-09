@@ -30,7 +30,6 @@ export async function POST(request: NextRequest) {
       sourcePath?: unknown;
       baseSourcePath?: unknown;
       overlaySourcePath?: unknown;
-      destinationFolder?: unknown;
       layout?: unknown;
       removeBackground?: unknown;
     };
@@ -39,7 +38,6 @@ export async function POST(request: NextRequest) {
       : [String(input.receiverId || "")];
     if (input.kind === "save-picture-in-picture") {
       const recipe = await savePictureInPictureRecipe({
-        destinationFolder: String(input.destinationFolder || ""),
         baseSourcePath: String(input.baseSourcePath || ""),
         overlaySourcePath: String(input.overlaySourcePath || ""),
         layout: input.layout,

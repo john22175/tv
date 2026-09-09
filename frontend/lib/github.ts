@@ -4,7 +4,8 @@ import {
   assertSourceDirectory,
   assertSourcePath,
   isInternalSourcePath,
-  isPictureInPictureRecipePath,
+  isManagedPictureInPicturePath,
+  PICTURE_IN_PICTURE_RECIPE_FILENAME,
   pictureInPictureRecipePath,
   sourceMarkerPath,
   sourceMimeType,
@@ -39,7 +40,6 @@ type PictureInPictureLayout = { x: number; y: number; width: number; height: num
 type PictureInPictureBackgroundRemoval = { color: string; tolerance: number };
 
 export type PictureInPictureRecipeInput = {
-  destinationFolder: string;
   baseSourcePath: string;
   overlaySourcePath: string;
   layout: unknown;
@@ -62,13 +62,16 @@ function config() {
   if (!token) {
     throw new Error("GITHUB_SOURCE_MANAGER_TOKEN is not configured.");
   }
+  const owner = process.env.SOURCE_GITHUB_OWNER?.trim();
+  const repository = process.env.SOURCE_GITHUB_REPOSITORY?.trim();
+  if (!owner || !repository) {
+    throw new Error("SOURCE_GITHUB_OWNER and SOURCE_GITHUB_REPOSITORY must be configured.");
+  }
   return {
     token,
-    // The fallback names keep the legacy repository usable until the source
-    // repository is created. New deployments must set SOURCE_GITHUB_*.
-    owner: process.env.SOURCE_GITHUB_OWNER?.trim() || process.env.GITHUB_OWNER?.trim() || "john22175",
-    repository: process.env.SOURCE_GITHUB_REPOSITORY?.trim() || process.env.GITHUB_REPOSITORY?.trim() || "tv",
-    branch: process.env.SOURCE_GITHUB_BRANCH?.trim() || process.env.GITHUB_BRANCH?.trim() || "main",
+    owner,
+    repository,
+    branch: process.env.SOURCE_GITHUB_BRANCH?.trim() || "main",
   };
 }
 
@@ -164,6 +167,11 @@ export async function listSources(): Promise<SourceRecord[]> {
 }
 
 export async function sourceExists(relativePath: string): Promise<boolean> {
+  return (await sourceRevision(relativePath)) !== null;
+}
+
+/** Return the current blob SHA so a deliberate overwrite is conflict-safe. */
+export async function sourceRevision(relativePath: string): Promise<string | null> {
   const { owner, repository, branch } = config();
   const safePath = assertSourcePath(relativePath);
   const response = await fetch(
@@ -178,13 +186,17 @@ export async function sourceExists(relativePath: string): Promise<boolean> {
       cache: "no-store",
     },
   );
-  if (response.status === 404) return false;
+  if (response.status === 404) return null;
   if (!response.ok) throw new Error(`GitHub lookup failed (${response.status}).`);
-  return true;
+  const payload = await response.json() as { sha?: unknown };
+  return typeof payload.sha === "string" && /^[0-9a-f]{40,64}$/i.test(payload.sha) ? payload.sha : null;
 }
 
 export async function deleteSource(input: { path: string; sha: string }): Promise<void> {
   const path = assertSourcePath(input.path);
+  if (isManagedPictureInPicturePath(path)) {
+    throw new SourceValidationError("The reusable PiP files are replaced from the Picture in picture tab and cannot be deleted directly.");
+  }
   if (!/^[0-9a-f]{40,64}$/i.test(input.sha)) {
     throw new Error("The source revision is invalid. Refresh the source list and try again.");
   }
@@ -237,6 +249,9 @@ export async function deleteSourceFolder(input: { path: string; markerSha: strin
 export async function moveSource(input: { fromPath: string; toPath: string; sha: string }): Promise<void> {
   const fromPath = assertSourcePath(input.fromPath);
   const toPath = assertSourcePath(input.toPath);
+  if (isManagedPictureInPicturePath(fromPath) || isManagedPictureInPicturePath(toPath)) {
+    throw new SourceValidationError("The reusable PiP files stay in Welcome/Temp and can only be replaced from the Picture in picture tab.");
+  }
   if (fromPath === toPath) return;
   if (!/^[0-9a-f]{40,64}$/i.test(input.sha)) {
     throw new SourceValidationError("The source revision is invalid. Refresh the source list and try again.");
@@ -277,11 +292,6 @@ export async function moveSource(input: { fromPath: string; toPath: string; sha:
   );
 }
 
-function directParentPath(path: string): string {
-  const index = path.lastIndexOf("/");
-  return index < 0 ? "" : path.slice(0, index);
-}
-
 function clampLayoutNumber(value: unknown, fallback: number, minimum: number, maximum: number): number {
   const number = Number(value);
   return Number.isFinite(number) ? Math.min(maximum, Math.max(minimum, number)) : fallback;
@@ -318,9 +328,6 @@ function normalizePictureInPictureBackgroundRemoval(value: unknown): PictureInPi
  * transient state where an older recipe is still selectable.
  */
 export async function savePictureInPictureRecipe(input: PictureInPictureRecipeInput): Promise<PictureInPictureRecipeResult> {
-  const destinationFolder = input.destinationFolder.trim()
-    ? assertSourceDirectory(input.destinationFolder)
-    : "";
   const baseSourcePath = assertSourcePath(input.baseSourcePath);
   const overlaySourcePath = assertSourcePath(input.overlaySourcePath);
   if (baseSourcePath === overlaySourcePath) {
@@ -333,10 +340,14 @@ export async function savePictureInPictureRecipe(input: PictureInPictureRecipeIn
     throw new SourceValidationError("Picture-in-picture supports image and video overlay sources only.");
   }
 
-  const path = pictureInPictureRecipePath(destinationFolder);
+  const path = pictureInPictureRecipePath();
   const currentSources = await listSources();
+  const currentFiles = new Set(currentSources.filter((entry) => entry.kind === "file").map((entry) => entry.path));
+  if (!currentFiles.has(baseSourcePath) || !currentFiles.has(overlaySourcePath)) {
+    throw new SourceValidationError("Both picture-in-picture sources must still exist in the published source library.");
+  }
   const replacedPaths = currentSources
-    .filter((entry) => entry.kind === "file" && directParentPath(entry.path) === destinationFolder && isPictureInPictureRecipePath(entry.path))
+    .filter((entry) => entry.kind === "file" && entry.name === PICTURE_IN_PICTURE_RECIPE_FILENAME)
     .map((entry) => entry.path)
     .filter((entryPath) => entryPath !== path);
   const recipe = {

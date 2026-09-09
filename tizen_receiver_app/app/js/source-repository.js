@@ -1,12 +1,11 @@
 (function attachSourceRepository(global) {
   "use strict";
 
-  // This legacy-safe default keeps existing packages working until a deploy
-  // target explicitly selects the separate media-only source repository.
-  // deploy-receiver.ps1 writes the configured value into each package.
+  // This is the production media repository. deploy-receiver.ps1 writes the
+  // same configured value into each receiver-specific package.
   global.MultiHubSourceRepository = {
     owner: "john22175",
-    repository: "tv",
+    repository: "t-sources",
     branch: "main",
   };
 }(globalThis));

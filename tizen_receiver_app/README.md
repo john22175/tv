@@ -4,7 +4,7 @@ The editable Samsung TV receiver project lives in [`app/`](app/). Its app ID is 
 
 ## Published sources
 
-At startup, and when **Refresh Sources** is selected on the TV, the receiver reads the public `main` branch of the configured source repository. It downloads only regular files beneath `sources/`, preserving source folders. The Blob-free deployment uses a separate public `tv-sources` repository so media commits cannot alter receiver/dashboard code.
+At startup, and when **Refresh Sources** is selected on the TV, the receiver reads the public `main` branch of `john22175/t-sources`. It downloads only regular files beneath `sources/`, preserving source folders. The local `tv/sources/` tree is retired and is never a production receiver source.
 
 Sources must remain below 95 MiB. Git LFS is not supported because the receiver downloads GitHub raw URLs directly. Use the [`frontend/`](../frontend/) dashboard to publish and remove sources; changes are available after the next TV source refresh without reinstalling this app.
 
@@ -16,4 +16,4 @@ Build output, signing data, and historical packages are intentionally local-only
 2. Run `./scripts/deploy-receiver.ps1` from this directory.
 3. Use `-WhatIf` first to review the per-TV connect, uninstall, install, and launch commands without changing a TV.
 
-The deployment command builds the app, creates a receiver-specific package for every configured TV, uninstalls `MHubRcvr01`, installs the signed WGT, and opens the receiver. The packaged `receiverId` lets the Vercel dashboard stage a source to that TV without remote pairing. The receiver checks the dashboard command endpoint every 60 seconds, with an immediate check when it starts. It does not write a presence heartbeat, so the dashboard deliberately does not claim a live online/offline state.
+The deployment command builds the app, creates a receiver-specific package for every configured TV, uninstalls `MHubRcvr01`, installs the signed WGT, and opens the receiver. The packaged `receiverId` lets the Vercel dashboard stage a source to that TV without remote pairing. The receiver checks the dashboard command endpoint every 60 seconds, with an immediate check when it starts. It does not write a presence heartbeat or poll the retired desktop server, so the dashboard deliberately does not claim a live online/offline state. See [`../docs/receiver-runtime.md`](../docs/receiver-runtime.md) for the full runtime contract and reusable PiP paths.

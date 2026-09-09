@@ -2,18 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { isAuthenticated } from "@/lib/auth";
 import { createGitHubInstallationToken } from "@/lib/github-app";
-import { sourceExists } from "@/lib/github";
-import { assertSourcePath, assertSourceSize, sourcePath, SourceValidationError } from "@/lib/sources";
+import { sourceRevision } from "@/lib/github";
+import { assertSourcePath, assertSourceSize, pictureInPictureOverlayPath, sourcePath, SourceValidationError } from "@/lib/sources";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type UploadRequest = { path?: unknown; size?: unknown };
+type UploadRequest = { path?: unknown; size?: unknown; overwrite?: unknown };
 
 function sourceRepository() {
-  const owner = process.env.SOURCE_GITHUB_OWNER?.trim() || process.env.GITHUB_OWNER?.trim();
-  const repository = process.env.SOURCE_GITHUB_REPOSITORY?.trim() || process.env.GITHUB_REPOSITORY?.trim();
-  const branch = process.env.SOURCE_GITHUB_BRANCH?.trim() || process.env.GITHUB_BRANCH?.trim() || "main";
+  const owner = process.env.SOURCE_GITHUB_OWNER?.trim();
+  const repository = process.env.SOURCE_GITHUB_REPOSITORY?.trim();
+  const branch = process.env.SOURCE_GITHUB_BRANCH?.trim() || "main";
   if (!owner || !repository) {
     throw new Error("SOURCE_GITHUB_OWNER and SOURCE_GITHUB_REPOSITORY must be configured.");
   }
@@ -37,7 +37,9 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const input = await request.json() as UploadRequest;
     const path = assertSourcePath(input.path);
     assertSourceSize(input.size);
-    if (await sourceExists(path)) {
+    const overwrite = input.overwrite === true;
+    const existingSha = await sourceRevision(path);
+    if (existingSha && (!overwrite || path !== pictureInPictureOverlayPath())) {
       throw new SourceValidationError("A source with that filename already exists.");
     }
     const { owner, repository, branch } = sourceRepository();
@@ -47,6 +49,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       branch,
       path,
       token,
+      ...(existingSha ? { existingSha } : {}),
       expiresAt,
     }, {
       headers: { "Cache-Control": "no-store" },

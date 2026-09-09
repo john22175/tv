@@ -5,7 +5,9 @@ import {
   assertSourceFilename,
   assertSourcePath,
   assertSourceSize,
+  isManagedPictureInPicturePath,
   isPictureInPictureRecipePath,
+  pictureInPictureOverlayPath,
   pictureInPictureRecipePath,
   sourceMimeType,
   sourcePath,
@@ -36,10 +38,13 @@ describe("source validation", () => {
     expect(() => assertSourceSize(0)).toThrow();
   });
 
-  it("accepts the generated PiP recipe as a source with a fixed destination name", () => {
-    expect(assertSourcePath("Welcome/Welcome_Filled.pip.json")).toBe("Welcome/Welcome_Filled.pip.json");
-    expect(pictureInPictureRecipePath("Welcome")).toBe("Welcome/Welcome_Filled.pip.json");
-    expect(isPictureInPictureRecipePath("Welcome/Welcome_Filled.pip.json")).toBe(true);
-    expect(sourceMimeType("Welcome/Welcome_Filled.pip.json")).toBe("application/vnd.multihub.picture-in-picture+json");
+  it("uses one durable Welcome/Temp location for PiP files", () => {
+    expect(assertSourcePath("Welcome/Temp/Welcome_Filled.pip.json")).toBe("Welcome/Temp/Welcome_Filled.pip.json");
+    expect(pictureInPictureRecipePath()).toBe("Welcome/Temp/Welcome_Filled.pip.json");
+    expect(pictureInPictureOverlayPath()).toBe("Welcome/Temp/Welcome_Filled_overlay.png");
+    expect(isManagedPictureInPicturePath("Welcome/Temp/Welcome_Filled.pip.json")).toBe(true);
+    expect(isManagedPictureInPicturePath("Welcome/Welcome_Filled.pip.json")).toBe(false);
+    expect(isPictureInPictureRecipePath("Welcome/Temp/Welcome_Filled.pip.json")).toBe(true);
+    expect(sourceMimeType("Welcome/Temp/Welcome_Filled.pip.json")).toBe("application/vnd.multihub.picture-in-picture+json");
   });
 });

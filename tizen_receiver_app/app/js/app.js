@@ -1,13 +1,10 @@
 const STORAGE_KEYS = {
-  baseUrl: "multihub.baseUrl",
   alias: "multihub.receiverAlias",
   localSourceOverrideRevision: "multihub.localSourceOverrideRevision",
 };
-const DEFAULT_BASE_PORT = 65331;
-const DEFAULT_BASE_URL = "http://10.171.64.201:65331";
 const SOURCE_REPOSITORY = globalThis.MultiHubSourceRepository || {};
 const GITHUB_OWNER = String(SOURCE_REPOSITORY.owner || "john22175");
-const GITHUB_REPOSITORY = String(SOURCE_REPOSITORY.repository || "tv");
+const GITHUB_REPOSITORY = String(SOURCE_REPOSITORY.repository || "t-sources");
 const GITHUB_BRANCH = String(SOURCE_REPOSITORY.branch || "main");
 const GITHUB_COMMIT_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/commits/${GITHUB_BRANCH}`;
 const GITHUB_ROOT_TREE_URL = (treeSha) => `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPOSITORY}/git/trees/${encodeURIComponent(treeSha)}`;
@@ -37,7 +34,6 @@ const MAX_GITHUB_REFRESH_LOGS = 30;
 const TIZEN_OFFLINE_LIBRARY_ROOT = "documents";
 const TIZEN_OFFLINE_LIBRARY_DIRECTORY = "multihub-offline-library";
 
-let refreshTimer = null;
 let currentConfig = null;
 let currentRenderKey = null;
 let playbackProbeTimer = null;
@@ -62,7 +58,6 @@ let sourceMenuActionIndex = 0;
 let sourceMenuFolder = "";
 let refreshLogMenuOpen = false;
 let githubRefreshLogs = [];
-let lastDesktopSourceKey = "";
 let frontendStageRevision = "";
 let frontendStageActive = false;
 let receiverStagePollTimer = null;
@@ -96,58 +91,12 @@ function setImmersivePlayback(active) {
   document.body.classList.toggle("media-active", active);
 }
 
-function normalizeBaseUrl(value) {
-  const raw = String(value || "").trim().replace(/\/+$/, "");
-  if (!raw) {
-    return "";
-  }
-  try {
-    const url = new URL(raw.includes("://") ? raw : `http://${raw}`);
-    if (!url.port) {
-      url.port = String(DEFAULT_BASE_PORT);
-    }
-    return url.toString().replace(/\/+$/, "");
-  } catch (error) {
-    return raw;
-  }
-}
-
 function normalizeAlias(value) {
   return String(value || "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "")
     .slice(0, 8);
-}
-
-function currentStateUrl(baseUrl) {
-  return `${baseUrl}/receiver-state-current`;
-}
-
-function aliasStateUrl(baseUrl, alias) {
-  return `${baseUrl}/receiver-state-alias/${encodeURIComponent(alias)}`;
-}
-
-function currentLibraryUrl(baseUrl) {
-  return `${baseUrl}/receiver-library-current`;
-}
-
-function aliasLibraryUrl(baseUrl, alias) {
-  return `${baseUrl}/receiver-library-alias/${encodeURIComponent(alias)}`;
-}
-
-function libraryStatusUrl(baseUrl) {
-  return `${baseUrl}/receiver-library-status`;
-}
-
-function fallbackBaseUrl(baseUrl) {
-  try {
-    const url = new URL(baseUrl);
-    url.port = String(DEFAULT_BASE_PORT);
-    return url.toString().replace(/\/+$/, "");
-  } catch (error) {
-    return "";
-  }
 }
 
 function requestResult(request) {
@@ -469,42 +418,6 @@ function offlineLibraryEntryById(itemId, contentHash = "") {
   ) || null;
 }
 
-async function reportLibraryStatus(baseUrl, manifest, state, detail = "", storedBytes = offlineLibrary.storedBytes) {
-  if (!baseUrl || !manifest.request_id) {
-    return;
-  }
-  try {
-    await fetch(libraryStatusUrl(baseUrl), {
-      method: "POST",
-      cache: "no-store",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        request_id: manifest.request_id,
-        revision: manifest.revision,
-        state,
-        detail,
-        stored_bytes: Math.max(0, Number(storedBytes || 0)),
-      }),
-    });
-  } catch (error) {
-    console.warn("Could not report library status", error);
-  }
-}
-
-async function fetchLibraryManifestOnce(baseUrl, alias) {
-  let response = await fetch(currentLibraryUrl(baseUrl), { cache: "no-store" });
-  if (response.ok) {
-    return response.json();
-  }
-  if (response.status === 404 && alias) {
-    response = await fetch(aliasLibraryUrl(baseUrl, alias), { cache: "no-store" });
-    if (response.ok) {
-      return response.json();
-    }
-  }
-  throw new Error(`HTTP ${response.status}`);
-}
-
 function mimeTypeForName(name) {
   const normalizedName = String(name || "").toLowerCase();
   if (normalizedName.endsWith(".pip.json")) {
@@ -648,11 +561,10 @@ async function ensureOfflineLibraryCapacity(entries) {
   }
 }
 
-async function applyOfflineLibraryManifest(baseUrl, manifest) {
+async function applyOfflineLibraryManifest(manifest) {
   const entries = Array.isArray(manifest.entries) ? manifest.entries.filter(
     (entry) => entry && entry.id && entry.content_hash && entry.media_url && Number(entry.size) >= 0,
   ) : [];
-  await reportLibraryStatus(baseUrl, manifest, "syncing", `Preparing ${entries.length} saved source(s).`, 0);
   const useTizenFileStorage = supportsTizenOfflineFiles();
   if (!useTizenFileStorage) {
     await ensureOfflineLibraryCapacity(entries);
@@ -660,14 +572,7 @@ async function applyOfflineLibraryManifest(baseUrl, manifest) {
 
   const storedByHash = new Map();
   const storedEntries = [];
-  for (const [index, entry] of entries.entries()) {
-    await reportLibraryStatus(
-      baseUrl,
-      manifest,
-      "syncing",
-      `Downloading ${entry.name || "source"} (${index + 1}/${entries.length}).`,
-      uniqueLibraryBytes(storedEntries),
-    );
+  for (const entry of entries) {
     let storedEntry = storedByHash.get(entry.content_hash);
     if (!storedEntry && useTizenFileStorage) {
       const priorEntry = offlineLibrary.entries.find((candidate) => candidate.content_hash === entry.content_hash);
@@ -695,13 +600,6 @@ async function applyOfflineLibraryManifest(baseUrl, manifest) {
     }
     storedByHash.set(entry.content_hash, storedEntry);
     storedEntries.push(storedEntry);
-    await reportLibraryStatus(
-      baseUrl,
-      manifest,
-      "syncing",
-      `Saved ${entry.name || "source"} (${index + 1}/${entries.length}).`,
-      uniqueLibraryBytes(storedEntries),
-    );
   }
 
   const previousSelection = offlineLibrary.selectedId;
@@ -720,22 +618,15 @@ async function applyOfflineLibraryManifest(baseUrl, manifest) {
   } else {
     await removeUnusedOfflineBlobs(storedEntries);
   }
-  await reportLibraryStatus(baseUrl, manifest, "synced", `Saved ${storedEntries.length} source(s).`);
 }
 
-async function applyLibrarySync(baseUrl, manifest, { retryFailedRevision = false } = {}) {
+async function applyLibrarySync(manifest, { retryFailedRevision = false } = {}) {
   const requestId = String(manifest.request_id || "");
   const revision = String(manifest.revision || "");
   if (!requestId) {
     return false;
   }
   if (requestId === offlineLibrary.failedRequestId && !retryFailedRevision) {
-    await reportLibraryStatus(
-      baseUrl,
-      manifest,
-      "failed",
-      "The previous attempt for this source revision failed. Publish a new revision or restart the receiver to retry.",
-    );
     return false;
   }
   const savedFilesPresent = await offlineLibraryFilesPresent();
@@ -746,17 +637,15 @@ async function applyLibrarySync(baseUrl, manifest, { retryFailedRevision = false
     offlineLibrary.lastRequestId = requestId;
     offlineLibrary.failedRequestId = "";
     await persistOfflineLibraryMeta();
-    await reportLibraryStatus(baseUrl, manifest, "up_to_date", "Saved library already matches this revision.");
     return false;
   }
   try {
-    await applyOfflineLibraryManifest(baseUrl, manifest);
+    await applyOfflineLibraryManifest(manifest);
     return true;
   } catch (error) {
     offlineLibrary.lastRequestId = requestId;
     offlineLibrary.failedRequestId = requestId;
     await persistOfflineLibraryMeta();
-    await reportLibraryStatus(baseUrl, manifest, "failed", String(error && error.message || error));
     throw error;
   }
 }
@@ -808,11 +697,11 @@ function recordGitHubRefreshLog(message, type = "info") {
   }
 }
 
-async function runLibrarySync(baseUrl, loadManifest, options = {}) {
+async function runLibrarySync(loadManifest, options = {}) {
   if (offlineLibrarySyncPromise) {
     return offlineLibrarySyncPromise;
   }
-  offlineLibrarySyncPromise = (async () => applyLibrarySync(baseUrl, await loadManifest(), options))();
+  offlineLibrarySyncPromise = (async () => applyLibrarySync(await loadManifest(), options))();
   try {
     return await offlineLibrarySyncPromise;
   } finally {
@@ -820,12 +709,8 @@ async function runLibrarySync(baseUrl, loadManifest, options = {}) {
   }
 }
 
-async function syncOfflineLibrary(baseUrl, alias) {
-  return runLibrarySync(baseUrl, () => fetchLibraryManifestOnce(baseUrl, alias));
-}
-
 async function syncGitHubOfflineLibrary({ retryFailedRevision = false } = {}) {
-  return runLibrarySync(null, fetchGitHubLibraryManifest, { retryFailedRevision });
+  return runLibrarySync(fetchGitHubLibraryManifest, { retryFailedRevision });
 }
 
 async function requestGitHubSourceRefresh(trigger = "startup") {
@@ -1132,12 +1017,6 @@ function showPlayer() {
   claimRemoteFocus();
 }
 
-function saveBaseUrl(baseUrl) {
-  try {
-    localStorage.setItem(STORAGE_KEYS.baseUrl, normalizeBaseUrl(baseUrl));
-  } catch (error) {}
-}
-
 function saveAlias(alias) {
   const normalized = normalizeAlias(alias);
   if (!normalized) {
@@ -1150,27 +1029,18 @@ function saveAlias(alias) {
 
 function loadConfig() {
   const params = new URLSearchParams(window.location.search);
-  const paramBaseUrl = normalizeBaseUrl(params.get("base"));
   const paramAlias = normalizeAlias(params.get("alias"));
-  if (paramBaseUrl) {
-    saveBaseUrl(paramBaseUrl);
-  }
   if (paramAlias) {
     saveAlias(paramAlias);
   }
 
-  let storedBaseUrl = "";
   let storedAlias = "";
   try {
-    storedBaseUrl = normalizeBaseUrl(localStorage.getItem(STORAGE_KEYS.baseUrl));
     storedAlias = normalizeAlias(localStorage.getItem(STORAGE_KEYS.alias));
   } catch (error) {}
 
-  // A TV can retain an address from an earlier desktop machine. Prefer the
-  // packaged desktop address unless a launch URL deliberately overrides it.
-  const baseUrl = paramBaseUrl || DEFAULT_BASE_URL;
   const alias = paramAlias || storedAlias || "";
-  return { baseUrl, alias };
+  return { alias };
 }
 
 function receiverTargetId() {
@@ -2354,146 +2224,6 @@ function renderState(state, { offline = false, dashboardStage = false } = {}) {
   renderCard(state.source_name, state.note);
 }
 
-async function fetchStateOnce(baseUrl, alias) {
-  let response = await fetch(currentStateUrl(baseUrl), {
-    cache: "no-store",
-  });
-  if (response.ok) {
-    return response.json();
-  }
-
-  if (response.status === 404 && alias) {
-    response = await fetch(aliasStateUrl(baseUrl, alias), {
-      cache: "no-store",
-    });
-    if (response.ok) {
-      return response.json();
-    }
-  }
-
-  throw new Error(`HTTP ${response.status}`);
-}
-
-async function handleConnectedState(baseUrl, state) {
-  saveBaseUrl(baseUrl);
-  showPlayer();
-  void syncOfflineLibrary(baseUrl, currentConfig.alias).catch((error) => {
-    console.warn("Offline library sync was not completed", error);
-  });
-
-  // A dashboard stage deliberately takes priority over stale desktop state
-  // until a newer dashboard command arrives.
-  if (frontendStageActive) {
-    return;
-  }
-
-  if (offlineActive && !state.media_url) {
-    currentReceiverState = state;
-    setStatus("Connected · Saved Source");
-    return;
-  }
-
-  if (state.media_url) {
-    const desktopSourceKey = JSON.stringify({
-      source_name: state.source_name,
-      mime_type: state.mime_type,
-      media_url: state.media_url,
-      library_item_id: state.library_item_id,
-      library_content_hash: state.library_content_hash,
-    });
-    const desktopSourceChanged = desktopSourceKey !== lastDesktopSourceKey;
-    if (state.library_item_id && offlineLibraryEntryById(state.library_item_id, state.library_content_hash)) {
-      offlineLibrary.selectedId = state.library_item_id;
-      persistOfflineLibraryMeta().catch((error) => console.warn("Could not save current source", error));
-    }
-    if (offlineActive || desktopSourceChanged) {
-      offlineActive = false;
-      closeSourceMenu();
-    }
-    lastDesktopSourceKey = desktopSourceKey;
-  }
-  setStatus("Connected");
-  renderState(state);
-}
-
-async function showOfflineFallback() {
-  if (offlineActive) {
-    return true;
-  }
-  const entry = currentReceiverState && currentReceiverState.library_item_id
-    ? offlineLibraryEntryById(currentReceiverState.library_item_id, currentReceiverState.library_content_hash)
-    : null;
-  if (entry) {
-    return renderOfflineLibraryEntry(entry, { persistSelection: false });
-  }
-  return renderStoredOfflineSelection();
-}
-
-async function refresh() {
-  if (!currentConfig) {
-    return;
-  }
-
-  try {
-    let activeBaseUrl = currentConfig.baseUrl;
-    let state = await fetchStateOnce(activeBaseUrl, currentConfig.alias);
-    await handleConnectedState(activeBaseUrl, state);
-  } catch (error) {
-    if (frontendStageActive) {
-      setStatus("Dashboard Stage");
-      return;
-    }
-    const fallbackUrl = fallbackBaseUrl(currentConfig.baseUrl);
-    if (fallbackUrl && fallbackUrl !== currentConfig.baseUrl) {
-      try {
-        currentConfig = { ...currentConfig, baseUrl: fallbackUrl };
-        const fallbackState = await fetchStateOnce(fallbackUrl, currentConfig.alias);
-        await handleConnectedState(fallbackUrl, fallbackState);
-        return;
-      } catch (fallbackError) {}
-    }
-
-    const hasGitHubLibrary = String(offlineLibrary.revision || "").startsWith("github:");
-    setStatus(hasGitHubLibrary ? "GitHub Sources" : "Offline", hasGitHubLibrary ? "default" : "error");
-    showPlayer();
-    if (await showOfflineFallback()) {
-      return;
-    }
-    if (hasGitHubLibrary) {
-      renderCard(
-        offlineLibrary.entries.length ? "GitHub Sources Ready" : "GitHub Source Library Empty",
-        offlineLibrary.entries.length
-          ? `${offlineLibrary.entries.length} source(s) are saved on this TV. Press Up to choose one.`
-          : "No source files are currently published in the GitHub repository.",
-      );
-      return;
-    }
-    if (!activePlayback.mediaUrl) {
-      renderCard(
-        "Receiver Offline",
-        "Waiting for a matching TV entry from the desktop app or for MultiHub to come back online.",
-      );
-    } else {
-      note.textContent = "MultiHub is temporarily unreachable. Continuing the current media until the connection returns.";
-    }
-  }
-}
-
-function startRefreshing(config) {
-  currentConfig = config;
-  currentRenderKey = null;
-  setAlias(config.alias);
-  showPlayer();
-  if (!offlineActive) {
-    renderCard("Receiver Ready", "Waiting for the desktop app to send media to this TV.");
-  }
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-  }
-  refresh();
-  refreshTimer = setInterval(refresh, 2000);
-}
-
 async function refreshGitHubSourcesOnLoad() {
   setStatus("Loading GitHub Sources");
   const { changed } = await requestGitHubSourceRefresh("startup");
@@ -2525,7 +2255,12 @@ const initialConfig = loadConfig();
 (async () => {
   await loadOfflineLibrary();
   await renderStoredOfflineSelection();
-  startRefreshing(initialConfig);
+  currentConfig = initialConfig;
+  setAlias(initialConfig.alias);
+  showPlayer();
+  if (!offlineActive && !currentReceiverState) {
+    renderCard("Receiver Ready", "Loading GitHub sources and dashboard commands.");
+  }
   startReceiverStageListener();
   void refreshGitHubSourcesOnLoad().catch((error) => {
     console.warn("GitHub source refresh was not completed", error);

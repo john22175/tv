@@ -2,7 +2,10 @@ export const SOURCE_DIRECTORY = "sources";
 export const SOURCE_MAX_BYTES = 95 * 1024 * 1024;
 export const SOURCE_MAX_DEPTH = 4;
 export const SOURCE_FOLDER_MARKER = ".keep";
+/** Durable location for the one reusable picture-in-picture composition. */
+export const PICTURE_IN_PICTURE_DIRECTORY = "Welcome/Temp";
 export const PICTURE_IN_PICTURE_RECIPE_FILENAME = "Welcome_Filled.pip.json";
+export const PICTURE_IN_PICTURE_OVERLAY_FILENAME = "Welcome_Filled_overlay.png";
 export const PICTURE_IN_PICTURE_RECIPE_MIME_TYPE = "application/vnd.multihub.picture-in-picture+json";
 
 const SUPPORTED_EXTENSIONS = new Set([
@@ -80,11 +83,19 @@ export function sourcePath(relativePath: string): string {
   return `${SOURCE_DIRECTORY}/${assertSourcePath(relativePath)}`;
 }
 
-/** The generated PiP recipe always has a predictable name in its chosen folder. */
-export function pictureInPictureRecipePath(relativeDirectory: string): string {
-  const folder = relativeDirectory.trim();
-  const directory = folder ? assertSourceDirectory(folder) : "";
-  return directory ? `${directory}/${PICTURE_IN_PICTURE_RECIPE_FILENAME}` : PICTURE_IN_PICTURE_RECIPE_FILENAME;
+/** The generated PiP recipe always has one durable, reusable location. */
+export function pictureInPictureRecipePath(): string {
+  return `${PICTURE_IN_PICTURE_DIRECTORY}/${PICTURE_IN_PICTURE_RECIPE_FILENAME}`;
+}
+
+/** Clipboard overlays use one PNG path and are replaced rather than accumulated. */
+export function pictureInPictureOverlayPath(): string {
+  return `${PICTURE_IN_PICTURE_DIRECTORY}/${PICTURE_IN_PICTURE_OVERLAY_FILENAME}`;
+}
+
+/** These two generated files are replaced together, never moved or deleted from the library UI. */
+export function isManagedPictureInPicturePath(path: string): boolean {
+  return path === pictureInPictureRecipePath() || path === pictureInPictureOverlayPath();
 }
 
 export function sourceFolderPath(relativeDirectory: string): string {

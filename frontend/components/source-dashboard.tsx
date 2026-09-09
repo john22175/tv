@@ -3,7 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { SourceRecord } from "@/lib/github";
-import { assertSourceFilename, assertSourceSize, SOURCE_MAX_BYTES, SourceValidationError } from "@/lib/sources";
+import {
+  assertSourceFilename,
+  assertSourceSize,
+  PICTURE_IN_PICTURE_DIRECTORY,
+  PICTURE_IN_PICTURE_OVERLAY_FILENAME,
+  pictureInPictureOverlayPath,
+  pictureInPictureRecipePath,
+  SOURCE_MAX_BYTES,
+  SourceValidationError,
+} from "@/lib/sources";
 
 type UploadState = "idle" | "uploading" | "error";
 type Receiver = { id: string; label: string; host: string; commandRevision: string | null; stagedAt: string | null; pollIntervalMs: number };
@@ -12,11 +21,10 @@ type DashboardTab = "library" | "picture-in-picture";
 type PictureInPictureLayout = { x: number; y: number; width: number; height: number };
 type PictureInPictureDrag = { pointerId: number; mode: "move" | "resize"; originX: number; originY: number; layout: PictureInPictureLayout };
 type BackgroundRemoval = { color: string; tolerance: number };
-type DirectGitHubUpload = { contentUrl: string; branch: string; path: string; token: string; error?: string };
+type DirectGitHubUpload = { contentUrl: string; branch: string; path: string; token: string; existingSha?: string; error?: string };
 
 const DEFAULT_PICTURE_IN_PICTURE_LAYOUT: PictureInPictureLayout = { x: 0.64, y: 0.06, width: 0.3, height: 0.3 };
 const PICTURE_IN_PICTURE_SELECTION = "picture-in-picture";
-const PICTURE_IN_PICTURE_RECIPE_FILENAME = "Welcome_Filled.pip.json";
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
@@ -141,11 +149,43 @@ function fileBase64(file: File): Promise<string> {
   });
 }
 
-async function directGitHubUpload(file: File, path: string, onProgress: (percentage: number) => void): Promise<void> {
+/** Convert every pasted image to one predictable PNG that can be overwritten safely. */
+function clipboardImageAsReusableOverlay(file: File): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const canvas = document.createElement("canvas");
+      canvas.width = image.naturalWidth;
+      canvas.height = image.naturalHeight;
+      const context = canvas.getContext("2d");
+      if (!context || !canvas.width || !canvas.height) {
+        reject(new Error("The clipboard image could not be prepared."));
+        return;
+      }
+      context.drawImage(image, 0, 0);
+      canvas.toBlob((blob) => {
+        if (!blob) {
+          reject(new Error("The clipboard image could not be converted to PNG."));
+          return;
+        }
+        resolve(new File([blob], PICTURE_IN_PICTURE_OVERLAY_FILENAME, { type: "image/png" }));
+      }, "image/png");
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error("The clipboard image could not be read."));
+    };
+    image.src = objectUrl;
+  });
+}
+
+async function directGitHubUpload(file: File, path: string, onProgress: (percentage: number) => void, overwrite = false): Promise<void> {
   const authorization = await fetch("/api/uploads", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, size: file.size }),
+    body: JSON.stringify({ path, size: file.size, overwrite }),
   });
   const session = await authorization.json() as DirectGitHubUpload;
   if (!authorization.ok || !session.contentUrl || !session.token || !session.branch || session.path !== path) {
@@ -178,7 +218,7 @@ async function directGitHubUpload(file: File, path: string, onProgress: (percent
         reject(new Error(`GitHub upload failed (${request.status}).`));
       }
     };
-    request.send(JSON.stringify({ message: `source-manager: add ${path}`, content, branch: session.branch }));
+    request.send(JSON.stringify({ message: `source-manager: add ${path}`, content, branch: session.branch, ...(session.existingSha ? { sha: session.existingSha } : {}) }));
   });
 }
 
@@ -225,7 +265,6 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [selectedReceiverIds, setSelectedReceiverIds] = useState<Record<string, string[]>>({});
   const [baseSourcePath, setBaseSourcePath] = useState("");
   const [overlaySourcePath, setOverlaySourcePath] = useState("");
-  const [pictureInPictureFolder, setPictureInPictureFolder] = useState("");
   const [pictureInPictureLayout, setPictureInPictureLayout] = useState<PictureInPictureLayout>(DEFAULT_PICTURE_IN_PICTURE_LAYOUT);
   const [removeOverlayBackground, setRemoveOverlayBackground] = useState(false);
   const [overlayBackgroundColor, setOverlayBackgroundColor] = useState("#ffffff");
@@ -308,16 +347,16 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const baseSource = useMemo(() => pictureInPictureFiles.find((item) => item.path === baseSourcePath), [baseSourcePath, pictureInPictureFiles]);
   const overlaySource = useMemo(() => pictureInPictureFiles.find((item) => item.path === overlaySourcePath), [overlaySourcePath, pictureInPictureFiles]);
 
-  async function addSource(file: File | null, selectFor?: "base" | "overlay", destinationFolder = folder) {
+  async function addSource(file: File | null, selectFor?: "base" | "overlay", destinationFolder = folder, overwrite = false) {
     if (!file) return;
     try {
       const filename = assertSourceFilename(file.name);
       assertSourceSize(file.size);
       const path = childPath(destinationFolder, filename);
-      if (files.some((item) => item.path === path)) throw new SourceValidationError("A source with that path already exists.");
+      if (files.some((item) => item.path === path) && !overwrite) throw new SourceValidationError("A source with that path already exists.");
       if (file.size > 50 * 1024 * 1024 && !window.confirm("This file is larger than 50 MiB. Direct GitHub upload Base64-encodes it in this browser, which can use substantial memory. Continue?")) return;
       setUploadState("uploading"); setProgress(0); setMessage(`Uploading ${path}...`);
-      await directGitHubUpload(file, path, setProgress);
+      await directGitHubUpload(file, path, setProgress, overwrite);
       await refreshSources();
       if (selectFor === "base") setBaseSourcePath(path);
       if (selectFor === "overlay") setOverlaySourcePath(path);
@@ -335,23 +374,22 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
       const item = Array.from(event.clipboardData?.items || []).find((candidate) => candidate.type.startsWith("image/"));
       const image = item?.getAsFile();
       if (!image) return;
-      const extensions: Record<string, string> = {
-        "image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/bmp": "bmp", "image/webp": "webp",
-      };
-      const extension = extensions[image.type.toLowerCase()];
-      if (!extension) {
+      if (!["image/jpeg", "image/png", "image/gif", "image/bmp", "image/webp"].includes(image.type.toLowerCase())) {
         setUploadState("error");
         setMessage("Clipboard images must be JPG, PNG, GIF, BMP, or WebP.");
         return;
       }
       event.preventDefault();
-      const stamp = new Date().toISOString().replace(/[^0-9]/g, "");
-      const file = new File([image], `Pasted_${stamp}.${extension}`, { type: image.type });
-      void addSource(file, "overlay", pictureInPictureFolder);
+      void clipboardImageAsReusableOverlay(image)
+        .then((file) => addSource(file, "overlay", PICTURE_IN_PICTURE_DIRECTORY, true))
+        .catch((error) => {
+          setUploadState("error");
+          setMessage(error instanceof Error ? error.message : "The clipboard image could not be prepared.");
+        });
     }
     window.addEventListener("paste", pasteClipboardImage);
     return () => window.removeEventListener("paste", pasteClipboardImage);
-  }, [activeTab, files, folder, pictureInPictureFolder, refreshSources]);
+  }, [activeTab, files, folder, refreshSources]);
 
   async function createFolder() {
     const name = window.prompt("Folder name", "");
@@ -428,11 +466,11 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     if (!baseSource || !overlaySource || !receiverIds.length) return;
     if (baseSource.path === overlaySource.path) { setUploadState("error"); setMessage("Choose two different sources for picture-in-picture."); return; }
     try {
-      const target = childPath(pictureInPictureFolder, PICTURE_IN_PICTURE_RECIPE_FILENAME);
+      const target = pictureInPictureRecipePath();
       setStaging(PICTURE_IN_PICTURE_SELECTION); setMessage(`Saving ${target} and staging it to ${receiverIds.length} TV${receiverIds.length === 1 ? "" : "s"}...`);
       const response = await fetch("/api/receivers", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: "save-picture-in-picture", receiverIds, baseSourcePath: baseSource.path, overlaySourcePath: overlaySource.path, destinationFolder: pictureInPictureFolder, layout: pictureInPictureLayout, removeBackground: removeOverlayBackground ? { color: overlayBackgroundColor, tolerance: 32 } : null }),
+        body: JSON.stringify({ kind: "save-picture-in-picture", receiverIds, baseSourcePath: baseSource.path, overlaySourcePath: overlaySource.path, layout: pictureInPictureLayout, removeBackground: removeOverlayBackground ? { color: overlayBackgroundColor, tolerance: 32 } : null }),
       });
       const payload = await response.json() as { error?: string; recipe?: { path?: string; replacedPaths?: string[] } };
       if (!response.ok) throw new Error(payload.error || "Could not save picture-in-picture.");
@@ -448,19 +486,19 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const selectedPictureInPictureReceivers = selectedReceiverIds[PICTURE_IN_PICTURE_SELECTION] || [];
   const dashboardTabs = <nav className="dashboard-tabs" aria-label="Dashboard views">
     <button className={activeTab === "library" ? "active" : ""} type="button" onClick={() => setActiveTab("library")}>Source library</button>
-    <button className={activeTab === "picture-in-picture" ? "active" : ""} type="button" onClick={() => { setPictureInPictureFolder(folder); setActiveTab("picture-in-picture"); }}>Picture in picture</button>
+    <button className={activeTab === "picture-in-picture" ? "active" : ""} type="button" onClick={() => setActiveTab("picture-in-picture")}>Picture in picture</button>
   </nav>;
 
   if (activeTab === "picture-in-picture") {
     return <section className="source-manager">
       {dashboardTabs}
       <section className="pip-card">
-        <div className="pip-heading"><div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Select published sources only, then save the reusable composition as <strong>Welcome_Filled</strong> in a source folder. Press <kbd>Ctrl</kbd> + <kbd>V</kbd> anywhere in this tab to save a clipboard image to that folder and use it as the overlay.</p></div><button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button></div>
+        <div className="pip-heading"><div><p className="eyebrow">TV composition</p><h2>Picture in picture</h2><p>Select published sources, then save the reusable <strong>Welcome_Filled</strong> composition in <code>Welcome/Temp</code>. Press <kbd>Ctrl</kbd> + <kbd>V</kbd> here to replace its reusable overlay image.</p></div><button className="button secondary" type="button" onClick={() => setPictureInPictureLayout(DEFAULT_PICTURE_IN_PICTURE_LAYOUT)}>Reset layout</button></div>
         <div className="pip-workspace">
           <div className="pip-controls">
             <label>Base source<select value={baseSourcePath} onChange={(event) => setBaseSourcePath(event.target.value)}><option value="">Select full-screen source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === overlaySourcePath}>{source.path}</option>)}</select></label>
             <label>Picture in picture<select value={overlaySourcePath} onChange={(event) => setOverlaySourcePath(event.target.value)}><option value="">Select overlay source</option>{pictureInPictureFiles.map((source) => <option key={source.path} value={source.path} disabled={source.path === baseSourcePath}>{source.path}</option>)}</select></label>
-            <label>Save in folder<select value={pictureInPictureFolder} onChange={(event) => setPictureInPictureFolder(event.target.value)}><option value="">sources (root)</option>{folders.map((item) => <option key={item.path} value={item.path}>{item.path}</option>)}</select><small>Creates <code>{childPath(pictureInPictureFolder, PICTURE_IN_PICTURE_RECIPE_FILENAME)}</code>.</small></label>
+            <p className="pip-fixed-path">Reusable PiP files are stored in <code>sources/{PICTURE_IN_PICTURE_DIRECTORY}/</code>: <code>{pictureInPictureOverlayPath()}</code> and <code>{pictureInPictureRecipePath()}</code>.</p>
             <label className="pip-checkbox"><input type="checkbox" checked={removeOverlayBackground} disabled={!overlaySource || !isImageSource(overlaySource)} onChange={(event) => setRemoveOverlayBackground(event.target.checked)} /> Remove Background</label>
             {removeOverlayBackground ? <label>Background color<input type="color" value={overlayBackgroundColor} onChange={(event) => setOverlayBackgroundColor(event.target.value)} /><small>Matching overlay-image pixels become transparent.</small></label> : null}
             <div className="pip-position-readout"><span>Position</span><code>{Math.round(pictureInPictureLayout.x * 100)}% x {Math.round(pictureInPictureLayout.y * 100)}%</code><span>Size</span><code>{Math.round(pictureInPictureLayout.width * 100)}% x {Math.round(pictureInPictureLayout.height * 100)}%</code></div>
