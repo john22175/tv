@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 
 import type { SourceRecord } from "@/lib/github";
 import { assertSourceFilename, assertSourceSize, SOURCE_MAX_BYTES, SourceValidationError } from "@/lib/sources";
@@ -10,11 +10,16 @@ type Receiver = { id: string; label: string; host: string; commandRevision: stri
 type FolderItem = { path: string; name: string; sha: string | null };
 type DashboardTab = "library" | "picture-in-picture";
 type PictureInPictureLayout = { x: number; y: number; width: number; height: number };
+type PictureInPictureDrag = { pointerId: number; mode: "move" | "resize"; originX: number; originY: number; layout: PictureInPictureLayout };
 type DirectGitHubUpload = { contentUrl: string; branch: string; path: string; token: string; error?: string };
 
 const DEFAULT_PICTURE_IN_PICTURE_LAYOUT: PictureInPictureLayout = { x: 0.64, y: 0.06, width: 0.3, height: 0.3 };
 const PICTURE_IN_PICTURE_SELECTION = "picture-in-picture";
 const PICTURE_IN_PICTURE_RECIPE_FILENAME = "Welcome_Filled.pip.json";
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
@@ -172,6 +177,8 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   const [overlaySourcePath, setOverlaySourcePath] = useState("");
   const [pictureInPictureFolder, setPictureInPictureFolder] = useState("");
   const [pictureInPictureLayout, setPictureInPictureLayout] = useState<PictureInPictureLayout>(DEFAULT_PICTURE_IN_PICTURE_LAYOUT);
+  const [pictureInPictureDrag, setPictureInPictureDrag] = useState<PictureInPictureDrag | null>(null);
+  const pictureInPicturePreviewRef = useRef<HTMLDivElement>(null);
 
   const files = useMemo(() => sources.filter((item) => item.kind === "file"), [sources]);
   const totalSize = useMemo(() => files.reduce((total, item) => total + item.size, 0), [files]);
@@ -190,6 +197,45 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
   }, []);
 
   useEffect(() => { void refreshReceivers(); }, [refreshReceivers]);
+  useEffect(() => {
+    if (!pictureInPictureDrag) return;
+    const drag = pictureInPictureDrag;
+    function move(event: PointerEvent) {
+      if (event.pointerId !== drag.pointerId) return;
+      const preview = pictureInPicturePreviewRef.current;
+      if (!preview) return;
+      const bounds = preview.getBoundingClientRect();
+      if (!bounds.width || !bounds.height) return;
+      const deltaX = (event.clientX - drag.originX) / bounds.width;
+      const deltaY = (event.clientY - drag.originY) / bounds.height;
+      setPictureInPictureLayout(() => {
+        if (drag.mode === "resize") {
+          const aspectRatio = Math.max(0.1, drag.layout.width / drag.layout.height);
+          const widthDelta = Math.abs(deltaX) >= Math.abs(deltaY * aspectRatio) ? deltaX : deltaY * aspectRatio;
+          const minimumWidth = Math.max(0.12, 0.12 * aspectRatio);
+          const maximumWidth = Math.min(0.88, 1 - drag.layout.x, (1 - drag.layout.y) * aspectRatio);
+          const width = clamp(drag.layout.width + widthDelta, minimumWidth, maximumWidth);
+          return { ...drag.layout, width, height: width / aspectRatio };
+        }
+        return {
+          ...drag.layout,
+          x: clamp(drag.layout.x + deltaX, 0, 1 - drag.layout.width),
+          y: clamp(drag.layout.y + deltaY, 0, 1 - drag.layout.height),
+        };
+      });
+    }
+    function end(event: PointerEvent) {
+      if (event.pointerId === drag.pointerId) setPictureInPictureDrag(null);
+    }
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    return () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+    };
+  }, [pictureInPictureDrag]);
 
   const folders = useMemo(() => {
     const known = new Map<string, FolderItem>();
@@ -273,6 +319,20 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
     });
   }
 
+  function beginPictureInPictureDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    const target = event.target as HTMLElement;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setPictureInPictureDrag({
+      pointerId: event.pointerId,
+      mode: target.closest(".pip-resize-handle") ? "resize" : "move",
+      originX: event.clientX,
+      originY: event.clientY,
+      layout: pictureInPictureLayout,
+    });
+  }
+
   async function stageSource(receiverIds: string[], source: SourceRecord) {
     if (!receiverIds.length) return;
     try {
@@ -327,7 +387,7 @@ export function SourceDashboard({ initialSources }: { initialSources: SourceReco
             <label className="file-picker"><span>Add image as overlay</span><input type="file" accept=".jpg,.jpeg,.png,.gif,.bmp,.webp" disabled={uploadState === "uploading"} onChange={(event) => { void addSource(event.target.files?.[0] || null, "overlay"); event.currentTarget.value = ""; }} /></label>
             <div className="pip-position-readout"><span>Position</span><code>{Math.round(pictureInPictureLayout.x * 100)}% x {Math.round(pictureInPictureLayout.y * 100)}%</code><span>Size</span><code>{Math.round(pictureInPictureLayout.width * 100)}% x {Math.round(pictureInPictureLayout.height * 100)}%</code></div>
           </div>
-          <div className="pip-preview" aria-label="Picture-in-picture preview"><div className="pip-preview-label">TV preview</div>{baseSource ? <MediaPreview className="pip-base" source={baseSource} alt={`Base: ${baseSource.name}`} /> : <div className="pip-empty">Choose a base source</div>}{overlaySource ? <div className="pip-overlay-frame" style={{ left: `${pictureInPictureLayout.x * 100}%`, top: `${pictureInPictureLayout.y * 100}%`, width: `${pictureInPictureLayout.width * 100}%`, height: `${pictureInPictureLayout.height * 100}%` }}><MediaPreview source={overlaySource} alt={`Overlay: ${overlaySource.name}`} /><span className="pip-overlay-label">Picture in picture</span></div> : null}</div>
+          <div ref={pictureInPicturePreviewRef} className="pip-preview" aria-label="Picture-in-picture preview"><div className="pip-preview-label">TV preview</div>{baseSource ? <MediaPreview className="pip-base" source={baseSource} alt={`Base: ${baseSource.name}`} /> : <div className="pip-empty">Choose a base source</div>}{overlaySource ? <div className="pip-overlay-frame" style={{ left: `${pictureInPictureLayout.x * 100}%`, top: `${pictureInPictureLayout.y * 100}%`, width: `${pictureInPictureLayout.width * 100}%`, height: `${pictureInPictureLayout.height * 100}%` }} onPointerDown={beginPictureInPictureDrag} role="presentation"><MediaPreview source={overlaySource} alt={`Overlay: ${overlaySource.name}`} /><span className="pip-overlay-label">Picture in picture · drag to move</span><span className="pip-resize-handle" aria-label="Drag to resize" /></div> : null}</div>
         </div>
         <div className="pip-send-row"><p>{baseSource && overlaySource ? <><strong>{baseSource.name}</strong> as base with <strong>{overlaySource.name}</strong> as picture in picture. The saved source will be <strong>Welcome_Filled</strong>.</> : "Choose a base source and a second picture-in-picture source."}</p><details className="push-menu pip-send-menu"><summary className="button secondary">Save &amp; Stage{selectedPictureInPictureReceivers.length ? ` (${selectedPictureInPictureReceivers.length})` : ""}</summary><ReceiverPicker receivers={receivers} receiverError={receiverError} selected={selectedPictureInPictureReceivers} disabled={staging !== null} selectionKey={PICTURE_IN_PICTURE_SELECTION} onToggle={toggleReceiver} onRefresh={() => void refreshReceivers()} />{receivers.length && !receiverError ? <button className="button push-submit" type="button" disabled={!baseSource || !overlaySource || !selectedPictureInPictureReceivers.length || staging !== null} onClick={() => void saveAndStagePictureInPicture(selectedPictureInPictureReceivers)}>{staging === PICTURE_IN_PICTURE_SELECTION ? "Saving..." : `Save and stage for ${selectedPictureInPictureReceivers.length} TV${selectedPictureInPictureReceivers.length === 1 ? "" : "s"}`}</button> : null}</details></div>
         {uploadState === "uploading" ? <progress value={progress} max="100" /> : null}{message ? <p className={uploadState === "error" ? "form-error" : "status-message"}>{message}</p> : null}
