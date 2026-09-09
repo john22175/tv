@@ -1199,19 +1199,22 @@ function pictureInPictureBackgroundRemoval(value) {
 }
 
 function colorKeyedPictureInPictureImage(source, className, removal) {
-  const canvas = document.createElement("canvas");
-  canvas.className = `${className} picture-in-picture-background-removed`;
-  canvas.setAttribute("role", "img");
-  canvas.setAttribute("aria-label", String(source && source.sourceName || source && source.sourcePath || "Picture in picture"));
-  const image = new Image();
-  image.crossOrigin = "anonymous";
-  image.onload = () => {
+  // Older Samsung browser engines can composite a transparent canvas as an
+  // opaque black layer over its siblings. Key the image with a temporary
+  // canvas, then display the resulting alpha-preserving PNG in an <img>.
+  const output = document.createElement("img");
+  output.className = `${className} picture-in-picture-background-removed`;
+  output.alt = String(source && source.sourceName || source && source.sourcePath || "Picture in picture");
+  const sourceImage = new Image();
+  sourceImage.crossOrigin = "anonymous";
+  sourceImage.onload = () => {
     try {
+      const canvas = document.createElement("canvas");
       const context = canvas.getContext("2d");
-      if (!context || !image.naturalWidth || !image.naturalHeight) return;
-      canvas.width = image.naturalWidth;
-      canvas.height = image.naturalHeight;
-      context.drawImage(image, 0, 0);
+      if (!context || !sourceImage.naturalWidth || !sourceImage.naturalHeight) return;
+      canvas.width = sourceImage.naturalWidth;
+      canvas.height = sourceImage.naturalHeight;
+      context.drawImage(sourceImage, 0, 0);
       const pixels = context.getImageData(0, 0, canvas.width, canvas.height);
       const hex = removal.color.slice(1);
       const red = parseInt(hex.slice(0, 2), 16);
@@ -1227,12 +1230,17 @@ function colorKeyedPictureInPictureImage(source, className, removal) {
         }
       }
       context.putImageData(pixels, 0, 0);
+      output.src = canvas.toDataURL("image/png");
     } catch (error) {
       console.warn("Could not remove the picture-in-picture background", error);
+      output.src = String(source && source.mediaUrl || "");
     }
   };
-  image.src = String(source && source.mediaUrl || "");
-  return canvas;
+  sourceImage.onerror = () => {
+    output.src = String(source && source.mediaUrl || "");
+  };
+  sourceImage.src = String(source && source.mediaUrl || "");
+  return output;
 }
 
 function pictureInPictureStageElement(source, className, removal = null) {

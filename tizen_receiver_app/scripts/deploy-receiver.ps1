@@ -1,6 +1,7 @@
 [CmdletBinding(SupportsShouldProcess)]
 param(
     [string]$TargetsPath = (Join-Path $PSScriptRoot "..\deploy.targets.json"),
+    [string[]]$OnlyReceiverIds,
     [switch]$SkipBuild
 )
 
@@ -66,6 +67,15 @@ $targetsConfig = Get-Content -LiteralPath $TargetsPath -Raw | ConvertFrom-Json
 if (!$targetsConfig.targets -or $targetsConfig.targets.Count -eq 0) {
     throw "At least one deployment target is required."
 }
+if ($OnlyReceiverIds.Count) {
+    $requestedIds = @($OnlyReceiverIds | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    $configuredIds = @($targetsConfig.targets | ForEach-Object { [string]$_.receiverId })
+    $unknownIds = @($requestedIds | Where-Object { $_ -notin $configuredIds })
+    if ($unknownIds.Count) {
+        throw "Requested receiver IDs are not configured: $($unknownIds -join ', ')."
+    }
+    $targetsConfig.targets = @($targetsConfig.targets | Where-Object { [string]$_.receiverId -in $requestedIds })
+}
 
 $sourceRepository = $null
 if ($targetsConfig.sourceRepository) {
@@ -94,8 +104,8 @@ foreach ($target in $targetsConfig.targets) {
     }
 }
 
-$receiverIds = @($targetsConfig.targets | ForEach-Object { [string]$_.receiverId })
-if (($receiverIds | Select-Object -Unique).Count -ne $receiverIds.Count) {
+$configuredReceiverIds = @($targetsConfig.targets | ForEach-Object { [string]$_.receiverId })
+if (($configuredReceiverIds | Select-Object -Unique).Count -ne $configuredReceiverIds.Count) {
     throw "Every deployment target must have a unique receiverId."
 }
 
